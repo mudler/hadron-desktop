@@ -147,6 +147,15 @@ bindsym --locked XF86AudioLowerVolume exec wpctl set-volume @DEFAULT_AUDIO_SINK@
 bindsym --locked XF86AudioMute        exec wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
 bindsym --locked XF86AudioMicMute     exec wpctl set-mute @DEFAULT_AUDIO_SOURCE@ toggle
 
+### System control (no tray needed) #######################################
+# Network: a fuzzel Wi-Fi picker over nmcli. Bluetooth: bluetoothctl in a
+# floating terminal. Audio: fuzzel output switcher over wpctl (+ the media keys).
+bindsym $mod+n       exec sway-wifi-menu
+bindsym $mod+Shift+a exec sway-audio-menu
+bindsym $mod+Shift+b exec foot --app-id=floatterm -T bluetooth bluetoothctl
+# floating "control" terminals (bluetoothctl etc.), centered and sized
+for_window [app_id="floatterm"] floating enable, resize set 820 520, move position center
+
 ### Status bar ############################################################
 # Themed built-in swaybar.
 bar {

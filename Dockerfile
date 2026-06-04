@@ -1140,7 +1140,7 @@ RUN ldconfig 2>/dev/null || true; \
     # anything baked into the image there — ly would exec a missing launcher and
     # bounce straight back to the login screen. sway-install stays in
     # /usr/local/bin since it only runs at install time (live, /usr/local intact).
-    chmod +x /usr/bin/start-sway /usr/local/bin/sway-install; \
+    chmod +x /usr/bin/start-sway /usr/bin/sway-wifi-menu /usr/bin/sway-audio-menu /usr/local/bin/sway-install; \
     # ly: run the login manager on tty1 (instead of a getty); it authenticates
     # the cloud-config user and launches the Sway session via the session entry.
     sed -i 's/tty2/tty1/g; s/^tty = .*/tty = 1/' /etc/ly/config.ini /usr/lib/systemd/system/ly.service 2>/dev/null || true; \
