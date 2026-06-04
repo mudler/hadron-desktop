@@ -193,7 +193,7 @@ FROM toolchain AS xkeyboard-config
 ARG XKEYBOARD_CONFIG_VERSION=2.44
 RUN mkdir -p /xkeyboard-config
 WORKDIR /build
-RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-${XKEYBOARD_CONFIG_VERSION}.tar.xz -o xkeyboard-config.tar.xz && tar -xf xkeyboard-config.tar.xz && rm xkeyboard-config.tar.xz && mv xkeyboard-config-* xkeyboard-config-src
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config/-/archive/xkeyboard-config-${XKEYBOARD_CONFIG_VERSION}/xkeyboard-config-xkeyboard-config-${XKEYBOARD_CONFIG_VERSION}.tar.gz -o xkeyboard-config.tar.gz && tar -xf xkeyboard-config.tar.gz && rm xkeyboard-config.tar.gz && mv xkeyboard-config-xkeyboard-config-* xkeyboard-config-src
 WORKDIR /build/xkeyboard-config-src
 RUN pip3 install meson ninja
 RUN meson setup buildDir ${COMMON_MESON_FLAGS}
@@ -967,20 +967,22 @@ FROM toolchain AS xorgproto
 ARG XORGPROTO_VERSION=2024.1
 RUN mkdir -p /xorgproto
 WORKDIR /build
-RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://www.x.org/releases/individual/proto/xorgproto-${XORGPROTO_VERSION}.tar.xz -o xorgproto.tar.xz && tar -xf xorgproto.tar.xz && rm xorgproto.tar.xz && mv xorgproto-* xorgproto-src
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://gitlab.freedesktop.org/xorg/proto/xorgproto/-/archive/xorgproto-${XORGPROTO_VERSION}/xorgproto-xorgproto-${XORGPROTO_VERSION}.tar.gz -o xorgproto.tar.gz && tar -xf xorgproto.tar.gz && rm xorgproto.tar.gz && mv xorgproto-xorgproto-* xorgproto-src
 WORKDIR /build/xorgproto-src
-RUN ./configure ${COMMON_CONFIGURE_ARGS} --build=${BUILD} --disable-dependency-tracking
-RUN make -j$(nproc) && make install DESTDIR=/xorgproto
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS}
+RUN DESTDIR=/xorgproto ninja -C buildDir install
 
 FROM toolchain AS libxau
 COPY --from=xorgproto /xorgproto /
 ARG LIBXAU_VERSION=1.0.12
 RUN mkdir -p /libxau
 WORKDIR /build
-RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://www.x.org/releases/individual/lib/libXau-${LIBXAU_VERSION}.tar.xz -o libxau.tar.xz && tar -xf libxau.tar.xz && rm libxau.tar.xz && mv libXau-* libxau-src
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://gitlab.freedesktop.org/xorg/lib/libxau/-/archive/libXau-${LIBXAU_VERSION}/libxau-libXau-${LIBXAU_VERSION}.tar.gz -o libxau.tar.gz && tar -xf libxau.tar.gz && rm libxau.tar.gz && mv libxau-libXau-* libxau-src
 WORKDIR /build/libxau-src
-RUN ./configure ${COMMON_CONFIGURE_ARGS} --build=${BUILD} --disable-dependency-tracking
-RUN make -j$(nproc) && make install DESTDIR=/libxau
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS}
+RUN DESTDIR=/libxau ninja -C buildDir install
 
 FROM toolchain AS xcbproto
 ARG XCB_VERSION=1.17.0
