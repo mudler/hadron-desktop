@@ -1,0 +1,6 @@
+# Build artifacts from test/run.sh
+/build/
+# In-guest test outputs
+/test/artifacts/*.log
+/test/artifacts/*.png
+/test/artifacts/*.ppm

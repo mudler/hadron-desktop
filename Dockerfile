@@ -2,12 +2,10 @@
 #
 # Builds a full Wayland desktop (Sway) on top of the Hadron base image, with (in
 # later milestones) NetworkManager, PipeWire audio, wifi and bluetooth.
-# Everything is built from source against the Hadron musl toolchain, following
-# the multi-stage pattern of examples/add-packages/Dockerfile.doom.
+# Everything is built from source against the Hadron musl toolchain.
 #
-# Build:    docker build -t sway-desktop:dev examples/sway-desktop
-# Test:     examples/sway-desktop/test/run.sh   (full build -> boot -> assert loop)
-# Design:   docs/superpowers/specs/2026-06-03-sway-desktop-example-design.md
+# Build:    docker build -t sway-desktop:dev .
+# Test:     test/run.sh   (full build -> boot -> assert loop)
 #
 # Milestone M1: Sway compositor under systemd-logind, rendering on tty1 via an
 # autologin user, with a terminal (foot).

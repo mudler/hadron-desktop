@@ -1,15 +1,15 @@
 # Sway desktop on Hadron
 
 A full [Sway](https://swaywm.org/) Wayland desktop built on top of the minimal
-Hadron base image, with NetworkManager, PipeWire audio, wifi and bluetooth.
-Everything is compiled from source against the Hadron musl toolchain, in the
-same multi-stage style as [`../add-packages/Dockerfile.doom`](../add-packages/Dockerfile.doom).
+[Hadron](https://github.com/kairos-io/hadron) base image, with NetworkManager,
+PipeWire audio, wifi and bluetooth. Everything is compiled from source against
+the Hadron musl toolchain in a single multi-stage `Dockerfile`.
 
-This example is intentionally self-contained (single `Dockerfile`, a `rootfs/`
-overlay, a `test/` harness) so it can later be split into its own repository.
+The repo is self-contained (single `Dockerfile`, a `rootfs/` overlay, a `test/`
+harness) and depends only on the published Hadron images
+(`ghcr.io/kairos-io/hadron{,-toolchain}:main`) — no Hadron source checkout needed.
 
-> Status: built incrementally. See the milestone table below and the design doc
-> at `docs/superpowers/specs/2026-06-03-sway-desktop-example-design.md`.
+> Status: built incrementally — see the milestone table below.
 
 ## What's inside
 
@@ -26,7 +26,7 @@ overlay, a `test/` harness) so it can later be split into its own repository.
 
 ```sh
 # Build the desktop image (extends ghcr.io/kairos-io/hadron:main)
-docker build -t sway-desktop:dev examples/sway-desktop
+docker build -t sway-desktop:dev .
 ```
 
 To produce a bootable artifact, wrap it with the Kairos init layer and run it
@@ -48,11 +48,11 @@ bluetooth using virtual kernel devices (`mac80211_hwsim`, `hci_vhci`).
 
 ```sh
 # Run all assertions up to a given milestone (default M0)
-MILESTONE=M1 examples/sway-desktop/test/run.sh
+MILESTONE=M1 test/run.sh
 
 # Faster iteration
-SKIP_BUILD=1 examples/sway-desktop/test/run.sh   # reuse built images
-SKIP_ISO=1   examples/sway-desktop/test/run.sh   # reuse existing ISO
+SKIP_BUILD=1 test/run.sh   # reuse built images
+SKIP_ISO=1   test/run.sh   # reuse existing ISO
 ```
 
 The guest emits `SWAYTEST: PASS/FAIL <name>` markers on the serial console; the
@@ -98,7 +98,7 @@ those are hardware-validated):
 The default image is VM-slim. For real laptops, build with the firmware subset:
 
 ```sh
-docker build --build-arg FIRMWARE=true -t sway-desktop:hw examples/sway-desktop
+docker build --build-arg FIRMWARE=true -t sway-desktop:hw .
 ```
 
 This bundles a curated `linux-firmware` subset (iwlwifi, ath, rtw, brcm, intel
@@ -113,7 +113,7 @@ accelerated GL on real Intel/AMD laptops, build with `GPU=full`:
 
 ```sh
 docker build --build-arg GPU=full --build-arg FIRMWARE=true \
-  -t sway-desktop:hw examples/sway-desktop
+  -t sway-desktop:hw .
 ```
 
 `GPU=full` builds Mesa `iris` (Intel) + `radeonsi` (AMD), which require LLVM.
@@ -134,12 +134,11 @@ Validated: Mesa 25.3 builds `iris`/`radeonsi`/`virgl`/`softpipe` into
 all runtime symbols, and the resulting ISO boots. Actual GPU *rendering* is
 validated on physical hardware — QEMU has no real GPU, so a VM boot falls back to
 softpipe/virgl (software) while the hardware drivers ride along for real metal.
-See `docs/superpowers/specs/2026-06-03-toolchain-llvm-for-mesa.md`.
 
 ## Layout
 
 ```
-examples/sway-desktop/
+hadron-desktop/
   Dockerfile          # multi-stage build of the whole desktop stack
   cloud-config.yaml   # example Kairos install config (creates the desktop user)
   rootfs/             # overlay: sway config, ly session entry, launcher, env

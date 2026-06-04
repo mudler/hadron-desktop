@@ -6,8 +6,8 @@
 #   "SWAYTEST:" markers off the serial console -> pass/fail.
 #
 # Usage:
-#   examples/sway-desktop/test/run.sh                 # full run, milestone M0
-#   MILESTONE=M1 examples/sway-desktop/test/run.sh    # assert up to M1
+#   test/run.sh                 # full run, milestone M0
+#   MILESTONE=M1 test/run.sh    # assert up to M1
 #   SKIP_BUILD=1 ...                                  # reuse existing images
 #   SKIP_ISO=1   ...                                  # reuse existing ISO
 #   KEEP=1       ...                                  # don't delete artifacts
@@ -15,10 +15,10 @@
 # Exit code 0 = all asserted milestones passed, no FAILs. Non-zero otherwise.
 set -uo pipefail
 
-# --- locate repo root (two dirs up from this script) ------------------------
+# --- locate repo root (one dir up from this script) -------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXAMPLE_DIR="$(dirname "$SCRIPT_DIR")"
-REPO_ROOT="$(cd "$EXAMPLE_DIR/../.." && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+EXAMPLE_DIR="$REPO_ROOT"        # the repo root IS the desktop image build context
 cd "$REPO_ROOT"
 
 MILESTONE="${MILESTONE:-M0}"
