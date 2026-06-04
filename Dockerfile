@@ -1144,6 +1144,16 @@ RUN ldconfig 2>/dev/null || true; \
     # ly: run the login manager on tty1 (instead of a getty); it authenticates
     # the cloud-config user and launches the Sway session via the session entry.
     sed -i 's/tty2/tty1/g; s/^tty = .*/tty = 1/' /etc/ly/config.ini /usr/lib/systemd/system/ly.service 2>/dev/null || true; \
+    # Tokyo Night theme for ly: dark bg, blue box/border, matrix animation, clock.
+    sed -i \
+      -e 's/^animation = .*/animation = matrix/' \
+      -e 's/^bg = .*/bg = 0x001a1b26/' \
+      -e 's/^fg = .*/fg = 0x00c0caf5/' \
+      -e 's/^border_fg = .*/border_fg = 0x007aa2f7/' \
+      -e 's/^cmatrix_fg = .*/cmatrix_fg = 0x007aa2f7/' \
+      -e 's/^box_title = .*/box_title = Hadron Desktop/' \
+      -e 's/^clock = .*/clock = %H:%M/' \
+      /etc/ly/config.ini 2>/dev/null || true; \
     # ly's unit ships only `Alias=display-manager.service` (no WantedBy=), so a
     # plain `systemctl enable` never pulls it into a target. And Kairos forces
     # `systemctl set-default multi-user.target` at boot, so graphical.target
