@@ -1127,7 +1127,15 @@ RUN ldconfig 2>/dev/null || true; \
     # ly: run the login manager on tty1 (instead of a getty); it authenticates
     # the cloud-config user and launches the Sway session via the session entry.
     sed -i 's/tty2/tty1/g; s/^tty = .*/tty = 1/' /etc/ly/config.ini /usr/lib/systemd/system/ly.service 2>/dev/null || true; \
+    # ly's unit ships only `Alias=display-manager.service` (no WantedBy=), so a
+    # plain `systemctl enable` never pulls it into a target. And Kairos forces
+    # `systemctl set-default multi-user.target` at boot, so graphical.target
+    # (which Wants=display-manager.service) is never reached. Net result: ly never
+    # starts and boot stops at a login-less multi-user state. Wire ly straight
+    # into multi-user.target — it's a VT TUI with no graphical prerequisites.
     systemctl enable ly.service 2>/dev/null || true; \
+    mkdir -p /etc/systemd/system/multi-user.target.wants; \
+    ln -sf /usr/lib/systemd/system/ly.service /etc/systemd/system/multi-user.target.wants/ly.service; \
     systemctl mask getty@tty1.service 2>/dev/null || true; \
     # M2: NetworkManager is the network manager (systemd-networkd disabled at
     # runtime in favour of NM).
