@@ -832,6 +832,11 @@ WORKDIR /build
 RUN curl -L https://gitlab.freedesktop.org/pipewire/wireplumber/-/archive/${WIREPLUMBER_VERSION}/wireplumber-${WIREPLUMBER_VERSION}.tar.gz -o wireplumber.tar.gz && tar -xzf wireplumber.tar.gz && rm wireplumber.tar.gz && mv wireplumber-* wireplumber-src
 WORKDIR /build/wireplumber-src
 RUN pip3 install meson ninja
+# Pre-seed meson's wrap cache with lua (the wrap fetches it from www.lua.org,
+# which is frequently unreachable). MacPorts mirrors the identical tarball
+# (sha 164c7849…), and meson verifies the hash so the patch still applies.
+RUN mkdir -p subprojects/packagecache && \
+    curl -fL https://distfiles.macports.org/lua/lua-5.4.4.tar.gz -o subprojects/packagecache/lua-5.4.4.tar.gz
 RUN meson setup buildDir ${COMMON_MESON_FLAGS} \
     -Dsystem-lua=false -Dintrospection=disabled -Ddoc=disabled -Dtests=false \
     -Delogind=disabled -Dsystemd=enabled -Dsystemd-user-service=true -Dsystemd-system-service=false
