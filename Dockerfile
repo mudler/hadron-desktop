@@ -193,7 +193,7 @@ FROM toolchain AS xkeyboard-config
 ARG XKEYBOARD_CONFIG_VERSION=2.44
 RUN mkdir -p /xkeyboard-config
 WORKDIR /build
-RUN curl -fL https://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-${XKEYBOARD_CONFIG_VERSION}.tar.xz -o xkeyboard-config.tar.xz && tar -xf xkeyboard-config.tar.xz && rm xkeyboard-config.tar.xz && mv xkeyboard-config-* xkeyboard-config-src
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-${XKEYBOARD_CONFIG_VERSION}.tar.xz -o xkeyboard-config.tar.xz && tar -xf xkeyboard-config.tar.xz && rm xkeyboard-config.tar.xz && mv xkeyboard-config-* xkeyboard-config-src
 WORKDIR /build/xkeyboard-config-src
 RUN pip3 install meson ninja
 RUN meson setup buildDir ${COMMON_MESON_FLAGS}
@@ -967,7 +967,7 @@ FROM toolchain AS xorgproto
 ARG XORGPROTO_VERSION=2024.1
 RUN mkdir -p /xorgproto
 WORKDIR /build
-RUN curl -L https://www.x.org/releases/individual/proto/xorgproto-${XORGPROTO_VERSION}.tar.xz -o xorgproto.tar.xz && tar -xf xorgproto.tar.xz && rm xorgproto.tar.xz && mv xorgproto-* xorgproto-src
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://www.x.org/releases/individual/proto/xorgproto-${XORGPROTO_VERSION}.tar.xz -o xorgproto.tar.xz && tar -xf xorgproto.tar.xz && rm xorgproto.tar.xz && mv xorgproto-* xorgproto-src
 WORKDIR /build/xorgproto-src
 RUN ./configure ${COMMON_CONFIGURE_ARGS} --build=${BUILD} --disable-dependency-tracking
 RUN make -j$(nproc) && make install DESTDIR=/xorgproto
@@ -977,7 +977,7 @@ COPY --from=xorgproto /xorgproto /
 ARG LIBXAU_VERSION=1.0.12
 RUN mkdir -p /libxau
 WORKDIR /build
-RUN curl -L https://www.x.org/releases/individual/lib/libXau-${LIBXAU_VERSION}.tar.xz -o libxau.tar.xz && tar -xf libxau.tar.xz && rm libxau.tar.xz && mv libXau-* libxau-src
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://www.x.org/releases/individual/lib/libXau-${LIBXAU_VERSION}.tar.xz -o libxau.tar.xz && tar -xf libxau.tar.xz && rm libxau.tar.xz && mv libXau-* libxau-src
 WORKDIR /build/libxau-src
 RUN ./configure ${COMMON_CONFIGURE_ARGS} --build=${BUILD} --disable-dependency-tracking
 RUN make -j$(nproc) && make install DESTDIR=/libxau
@@ -1133,7 +1133,12 @@ COPY rootfs/ /
 # the system services, and configure the ly display manager on tty1.
 RUN ldconfig 2>/dev/null || true; \
     for g in audio video render input bluetooth seat; do groupadd -f "$g"; done; \
-    chmod +x /usr/local/bin/start-sway /usr/local/bin/sway-install; \
+    # start-sway lives in /usr/bin (NOT /usr/local): Kairos mounts /usr/local
+    # from the persistent partition on the installed system, which shadows
+    # anything baked into the image there — ly would exec a missing launcher and
+    # bounce straight back to the login screen. sway-install stays in
+    # /usr/local/bin since it only runs at install time (live, /usr/local intact).
+    chmod +x /usr/bin/start-sway /usr/local/bin/sway-install; \
     # ly: run the login manager on tty1 (instead of a getty); it authenticates
     # the cloud-config user and launches the Sway session via the session entry.
     sed -i 's/tty2/tty1/g; s/^tty = .*/tty = 1/' /etc/ly/config.ini /usr/lib/systemd/system/ly.service 2>/dev/null || true; \
