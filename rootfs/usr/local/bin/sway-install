@@ -137,7 +137,7 @@ stages:
           permissions: 0644
           content: |
             user = $USERNAME
-            session_index = 1
+            session_index = 2
 EOF
 
 log "Installing user '$USERNAME' (host '$HOSTNAME_VAL') to $DISK ..."
