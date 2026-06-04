@@ -193,7 +193,7 @@ FROM toolchain AS xkeyboard-config
 ARG XKEYBOARD_CONFIG_VERSION=2.44
 RUN mkdir -p /xkeyboard-config
 WORKDIR /build
-RUN curl -L http://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-${XKEYBOARD_CONFIG_VERSION}.tar.xz -o xkeyboard-config.tar.xz && tar -xf xkeyboard-config.tar.xz && rm xkeyboard-config.tar.xz && mv xkeyboard-config-* xkeyboard-config-src
+RUN curl -fL https://www.x.org/releases/individual/data/xkeyboard-config/xkeyboard-config-${XKEYBOARD_CONFIG_VERSION}.tar.xz -o xkeyboard-config.tar.xz && tar -xf xkeyboard-config.tar.xz && rm xkeyboard-config.tar.xz && mv xkeyboard-config-* xkeyboard-config-src
 WORKDIR /build/xkeyboard-config-src
 RUN pip3 install meson ninja
 RUN meson setup buildDir ${COMMON_MESON_FLAGS}
@@ -425,8 +425,26 @@ RUN DESTDIR=/pango ninja -C buildDir install
 
 
 # wlroots — compositor library (shared with doom)
+# libseat — built with the systemd-logind backend (libsystemd from toolchain).
+# MUST be defined before wlroots: wlroots links it for DRM session management,
+# and without it at build time wlroots disables the session backend entirely
+# ("Cannot create session: disabled at compile-time"), so sway can never open
+# DRM and gets bounced straight back to the login manager.
+FROM toolchain AS libseat
+ARG SEATD_VERSION=0.9.1
+RUN mkdir -p /libseat
+WORKDIR /build
+RUN curl -L https://git.sr.ht/~kennylevinsen/seatd/archive/${SEATD_VERSION}.tar.gz -o seatd.tar.gz && tar -xf seatd.tar.gz && rm seatd.tar.gz && mv seatd-* seatd-src
+WORKDIR /build/seatd-src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} \
+    -Dlibseat-logind=systemd -Dlibseat-seatd=enabled -Dlibseat-builtin=enabled -Dserver=enabled -Dexamples=disabled -Dman-pages=disabled
+RUN DESTDIR=/libseat ninja -C buildDir install
+
+
 FROM toolchain AS wlroots
 RUN mkdir -p /wlroots
+COPY --from=libseat /libseat /
 COPY --from=wayland /wayland /
 COPY --from=libdrm /libdrm /
 COPY --from=libxkb /libxkb /
@@ -443,19 +461,6 @@ WORKDIR /build/wlroots-src
 RUN pip3 install meson ninja
 RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dexamples=false -Dwerror=false
 RUN DESTDIR=/wlroots ninja -C buildDir install
-
-
-# libseat — built with the systemd-logind backend (libsystemd from toolchain)
-FROM toolchain AS libseat
-ARG SEATD_VERSION=0.9.1
-RUN mkdir -p /libseat
-WORKDIR /build
-RUN curl -L https://git.sr.ht/~kennylevinsen/seatd/archive/${SEATD_VERSION}.tar.gz -o seatd.tar.gz && tar -xf seatd.tar.gz && rm seatd.tar.gz && mv seatd-* seatd-src
-WORKDIR /build/seatd-src
-RUN pip3 install meson ninja
-RUN meson setup buildDir ${COMMON_MESON_FLAGS} \
-    -Dlibseat-logind=systemd -Dlibseat-seatd=enabled -Dlibseat-builtin=enabled -Dserver=enabled -Dexamples=disabled -Dman-pages=disabled
-RUN DESTDIR=/libseat ninja -C buildDir install
 
 
 # Sway

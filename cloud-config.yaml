@@ -39,7 +39,8 @@ users:
       # - github:yourusername
       # - ssh-ed25519 AAAA... you@host
 
-# Optional: pick a default session for ly (sway is the only one shipped).
+# Optional: pick the default session for ly. ly lists its built-in "shell"
+# session at index 0 and the Sway session at index 1, so default to 1.
 stages:
   initramfs:
     - name: "Default desktop session"
@@ -48,4 +49,4 @@ stages:
           permissions: 0644
           content: |
             user = kairos
-            session_index = 0
+            session_index = 1
