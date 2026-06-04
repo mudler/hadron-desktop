@@ -1123,7 +1123,7 @@ COPY rootfs/ /
 # the system services, and configure the ly display manager on tty1.
 RUN ldconfig 2>/dev/null || true; \
     for g in audio video render input bluetooth seat; do groupadd -f "$g"; done; \
-    chmod +x /usr/local/bin/start-sway; \
+    chmod +x /usr/local/bin/start-sway /usr/local/bin/sway-install; \
     # ly: run the login manager on tty1 (instead of a getty); it authenticates
     # the cloud-config user and launches the Sway session via the session entry.
     sed -i 's/tty2/tty1/g; s/^tty = .*/tty = 1/' /etc/ly/config.ini /usr/lib/systemd/system/ly.service 2>/dev/null || true; \

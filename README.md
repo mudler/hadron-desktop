@@ -66,12 +66,24 @@ harness parses them and exits non-zero on any failure. Screenshots captured with
 
 ### Users and login
 
-The image bakes in **no user**. The desktop user is defined at install time via
-a Kairos **cloud-config** (`users:` block — see `cloud-config.yaml`) and lives
-on the persistent `/home`. On boot the **`ly`** display manager (TUI, on tty1)
-authenticates that user and launches the Sway session
+The image bakes in **no user**. The desktop user is created at install time and
+lives on the persistent `/home`. On boot the **`ly`** display manager (TUI, on
+tty1) authenticates that user and launches the Sway session
 (`/usr/share/wayland-sessions/sway.desktop` → `start-sway`), giving Sway a
 proper logind seat session and the DRM/KMS backend.
+
+There are two ways to create that user:
+
+- **Interactive installer (default).** Boot the live ISO with nothing else and a
+  small wizard (`/usr/local/bin/sway-install`, wired in via
+  `system/oem/90_sway_installer.yaml`) prompts on tty1 for **hostname, username,
+  password, and target disk**, assigns the desktop groups (admin, audio, video,
+  render, input, bluetooth, seat), hashes the password (`openssl passwd -6`),
+  writes the cloud-config, and installs.
+- **Unattended cloud-config.** Provide a `cloud-config.yaml` (`users:`/`install:`
+  block — see the example file) via AuroraBoot `--cloud-config` or a datasource.
+  When one is present the wizard detects it and runs the normal unattended
+  install instead of prompting — so CI and automated installs are unaffected.
 
 ### Production vs test launch
 
