@@ -14,13 +14,18 @@ harness) and depends only on the published Hadron images
 ## What's inside
 
 - **Compositor:** Sway (wlroots), running under **systemd-logind** seat
-  management — an autologin user on `tty1` launches Sway, and `pam_systemd`
+  management — `ly` logs a user in on `tty1`, launching Sway, and `pam_systemd`
   registers a logind session that grants DRM/input device access.
 - **Terminal:** `foot`.
 - **Display stack:** wayland, wlroots, Mesa, libinput, libxkbcommon, pixman,
   pango/cairo, freetype/fontconfig (+ DejaVu fonts).
-- *(later milestones)* NetworkManager + wpa_supplicant, PipeWire + WirePlumber,
-  BlueZ, plus desktop polish (waybar, mako, fuzzel, …) and real-hardware firmware.
+- **Networking:** NetworkManager + wpa_supplicant (wifi).
+- **Audio:** PipeWire + WirePlumber.
+- **Bluetooth:** BlueZ.
+- **Desktop polish:** waybar, mako, fuzzel, wl-clipboard, slurp, swayidle.
+- **Real-hardware firmware:** optional curated `linux-firmware` subset
+  (`--build-arg FIRMWARE=true`).
+- **Hardware GL:** optional Mesa `iris`/`radeonsi` (`--build-arg GPU=full`).
 
 ## Build
 
