@@ -390,6 +390,8 @@ COPY --from=pixman /pixman /
 COPY --from=freetype /freetype /
 COPY --from=fontconfig /fontconfig /
 COPY --from=libpng /libpng /
+COPY --from=pcre2 /pcre2 /
+COPY --from=glib2 /glib2 /
 # 1.18.4 fixes the COLRv1 / FreeType 2.13.x cairo-ft detection bug.
 ARG CAIRO_VERSION=1.18.4
 RUN mkdir -p /cairo
@@ -398,7 +400,8 @@ RUN curl -L https://cairographics.org/releases/cairo-${CAIRO_VERSION}.tar.xz -o 
 WORKDIR /build/cairo-src
 RUN pip3 install meson ninja
 # PNG enabled so cairo_image_surface_create_from_png is available (swaybar/swaybg).
-RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dtests=disabled -Dglib=disabled -Dspectre=disabled \
+# glib enabled so cairo-gobject is built (required by GTK3 / waybar).
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dtests=disabled -Dglib=enabled -Dspectre=disabled \
     -Dfreetype=enabled -Dfontconfig=enabled -Dpng=enabled -Dxlib=disabled -Dxcb=disabled
 RUN DESTDIR=/cairo ninja -C buildDir install
 
@@ -423,6 +426,321 @@ RUN pip3 install meson ninja
 RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dintrospection=disabled -Dgtk_doc=false -Dfontconfig=enabled -Dfreetype=enabled -Dcairo=enabled
 RUN DESTDIR=/pango ninja -C buildDir install
 
+
+# ===========================================================================
+# GTK3 stack (for waybar). Wayland-only, NO GObject introspection (keeps it
+# tractable on musl). Network/audio/bluetooth are handled by waybar's native
+# modules + fuzzel menus over nmcli/wpctl/bluetoothctl — no nm-applet/pavucontrol.
+# ===========================================================================
+
+# libepoxy — GL/EGL dispatch used by GTK's GL renderer.
+FROM toolchain AS libepoxy
+COPY --from=mesa /mesa /
+ARG LIBEPOXY_VERSION=1.5.10
+RUN mkdir -p /libepoxy
+WORKDIR /build
+RUN curl -fL https://github.com/anholt/libepoxy/archive/refs/tags/${LIBEPOXY_VERSION}.tar.gz -o epoxy.tar.gz && tar -xf epoxy.tar.gz && rm epoxy.tar.gz && mv libepoxy-* epoxy-src
+WORKDIR /build/epoxy-src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dglx=no -Dx11=false -Degl=yes -Dtests=false
+RUN DESTDIR=/libepoxy ninja -C buildDir install
+
+# gdk-pixbuf — image loading (PNG only is plenty for the bar/applets).
+FROM toolchain AS gdk-pixbuf
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+COPY --from=libpng /libpng /
+ARG GDKPIXBUF_VERSION=2.42.12
+RUN mkdir -p /gdk-pixbuf
+WORKDIR /build
+RUN GP_MAJOR="${GDKPIXBUF_VERSION%.*}" && curl -fL https://download.gnome.org/sources/gdk-pixbuf/${GP_MAJOR}/gdk-pixbuf-${GDKPIXBUF_VERSION}.tar.xz -o gp.tar.xz && tar -xf gp.tar.xz && rm gp.tar.xz && mv gdk-pixbuf-* gp-src
+WORKDIR /build/gp-src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dtiff=disabled -Djpeg=disabled -Dothers=disabled \
+    -Dintrospection=disabled -Dman=false -Ddocs=false -Dinstalled_tests=false -Dgio_sniffing=false
+RUN DESTDIR=/gdk-pixbuf ninja -C buildDir install
+
+# atk — accessibility toolkit (GTK links it; the at-spi2 bridge stays runtime-optional).
+FROM toolchain AS atk
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+ARG ATK_VERSION=2.38.0
+RUN mkdir -p /atk
+WORKDIR /build
+RUN ATK_MAJOR="${ATK_VERSION%.*}" && curl -fL https://download.gnome.org/sources/atk/${ATK_MAJOR}/atk-${ATK_VERSION}.tar.xz -o atk.tar.xz && tar -xf atk.tar.xz && rm atk.tar.xz && mv atk-* atk-src
+WORKDIR /build/atk-src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dintrospection=false
+RUN DESTDIR=/atk ninja -C buildDir install
+
+# GTK3 itself — wayland-only.
+FROM toolchain AS gtk3
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+COPY --from=cairo /cairo /
+COPY --from=pango /pango /
+COPY --from=harfbuzz /harfbuzz /
+COPY --from=fribidi /fribidi /
+COPY --from=freetype /freetype /
+COPY --from=fontconfig /fontconfig /
+COPY --from=libpng /libpng /
+COPY --from=pixman /pixman /
+COPY --from=gdk-pixbuf /gdk-pixbuf /
+COPY --from=atk /atk /
+COPY --from=libepoxy /libepoxy /
+COPY --from=wayland /wayland /
+COPY --from=libxkb /libxkb /
+COPY --from=mesa /mesa /
+ARG GTK3_VERSION=3.24.43
+RUN mkdir -p /gtk3
+WORKDIR /build
+RUN GTK_MAJOR="${GTK3_VERSION%.*}" && curl -fL https://download.gnome.org/sources/gtk+/${GTK_MAJOR}/gtk+-${GTK3_VERSION}.tar.xz -o gtk.tar.xz && tar -xf gtk.tar.xz && rm gtk.tar.xz && mv gtk+-* gtk-src
+WORKDIR /build/gtk-src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} \
+    -Dx11_backend=false -Dwayland_backend=true -Dbroadway_backend=false \
+    -Dintrospection=false -Dgtk_doc=false -Dman=false -Ddemos=false -Dexamples=false -Dtests=false \
+    -Dprint_backends=file -Dcolord=no
+RUN DESTDIR=/gtk3 ninja -C buildDir install
+
+# --- gtkmm3 C++ wrappers (waybar links these) ------------------------------
+FROM toolchain AS libsigcpp
+ARG LIBSIGCPP_VERSION=2.12.1
+RUN mkdir -p /libsigcpp
+WORKDIR /build
+RUN curl -fL https://download.gnome.org/sources/libsigc++/2.12/libsigc++-${LIBSIGCPP_VERSION}.tar.xz -o s.tar.xz && tar -xf s.tar.xz && rm s.tar.xz && mv libsigc++-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dbuild-documentation=false -Dbuild-examples=false
+RUN DESTDIR=/libsigcpp ninja -C buildDir install
+
+FROM toolchain AS glibmm
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+COPY --from=libsigcpp /libsigcpp /
+ARG GLIBMM_VERSION=2.66.7
+RUN mkdir -p /glibmm
+WORKDIR /build
+RUN curl -fL https://download.gnome.org/sources/glibmm/2.66/glibmm-${GLIBMM_VERSION}.tar.xz -o g.tar.xz && tar -xf g.tar.xz && rm g.tar.xz && mv glibmm-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dbuild-documentation=false
+RUN DESTDIR=/glibmm ninja -C buildDir install
+
+FROM toolchain AS cairomm
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+COPY --from=cairo /cairo /
+COPY --from=freetype /freetype /
+COPY --from=fontconfig /fontconfig /
+COPY --from=libpng /libpng /
+COPY --from=pixman /pixman /
+COPY --from=libsigcpp /libsigcpp /
+ARG CAIROMM_VERSION=1.14.5
+RUN mkdir -p /cairomm
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://gitlab.freedesktop.org/cairo/cairomm/-/archive/${CAIROMM_VERSION}/cairomm-${CAIROMM_VERSION}.tar.gz -o c.tar.gz && tar -xf c.tar.gz && rm c.tar.gz && mv cairomm-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dbuild-documentation=false -Dbuild-tests=false
+RUN DESTDIR=/cairomm ninja -C buildDir install
+
+FROM toolchain AS pangomm
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+COPY --from=cairo /cairo /
+COPY --from=pango /pango /
+COPY --from=harfbuzz /harfbuzz /
+COPY --from=fribidi /fribidi /
+COPY --from=freetype /freetype /
+COPY --from=fontconfig /fontconfig /
+COPY --from=libpng /libpng /
+COPY --from=pixman /pixman /
+COPY --from=libsigcpp /libsigcpp /
+COPY --from=glibmm /glibmm /
+COPY --from=cairomm /cairomm /
+ARG PANGOMM_VERSION=2.46.4
+RUN mkdir -p /pangomm
+WORKDIR /build
+RUN curl -fL https://download.gnome.org/sources/pangomm/2.46/pangomm-${PANGOMM_VERSION}.tar.xz -o p.tar.xz && tar -xf p.tar.xz && rm p.tar.xz && mv pangomm-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dbuild-documentation=false
+RUN DESTDIR=/pangomm ninja -C buildDir install
+
+FROM toolchain AS atkmm
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+COPY --from=atk /atk /
+COPY --from=libsigcpp /libsigcpp /
+COPY --from=glibmm /glibmm /
+ARG ATKMM_VERSION=2.28.4
+RUN mkdir -p /atkmm
+WORKDIR /build
+RUN curl -fL https://download.gnome.org/sources/atkmm/2.28/atkmm-${ATKMM_VERSION}.tar.xz -o a.tar.xz && tar -xf a.tar.xz && rm a.tar.xz && mv atkmm-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dbuild-documentation=false
+RUN DESTDIR=/atkmm ninja -C buildDir install
+
+FROM toolchain AS gtkmm3
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+COPY --from=cairo /cairo /
+COPY --from=pango /pango /
+COPY --from=harfbuzz /harfbuzz /
+COPY --from=fribidi /fribidi /
+COPY --from=freetype /freetype /
+COPY --from=fontconfig /fontconfig /
+COPY --from=libpng /libpng /
+COPY --from=pixman /pixman /
+COPY --from=gdk-pixbuf /gdk-pixbuf /
+COPY --from=atk /atk /
+COPY --from=libepoxy /libepoxy /
+COPY --from=wayland /wayland /
+COPY --from=libxkb /libxkb /
+COPY --from=mesa /mesa /
+COPY --from=gtk3 /gtk3 /
+COPY --from=libsigcpp /libsigcpp /
+COPY --from=glibmm /glibmm /
+COPY --from=cairomm /cairomm /
+COPY --from=pangomm /pangomm /
+COPY --from=atkmm /atkmm /
+ARG GTKMM_VERSION=3.24.9
+RUN mkdir -p /gtkmm3
+WORKDIR /build
+RUN curl -fL https://download.gnome.org/sources/gtkmm/3.24/gtkmm-${GTKMM_VERSION}.tar.xz -o gm.tar.xz && tar -xf gm.tar.xz && rm gm.tar.xz && mv gtkmm-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dbuild-documentation=false -Dbuild-demos=false -Dbuild-tests=false
+RUN DESTDIR=/gtkmm3 ninja -C buildDir install
+
+# --- waybar support libraries ----------------------------------------------
+FROM toolchain AS gtk-layer-shell
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+COPY --from=cairo /cairo /
+COPY --from=pango /pango /
+COPY --from=harfbuzz /harfbuzz /
+COPY --from=fribidi /fribidi /
+COPY --from=freetype /freetype /
+COPY --from=fontconfig /fontconfig /
+COPY --from=libpng /libpng /
+COPY --from=pixman /pixman /
+COPY --from=gdk-pixbuf /gdk-pixbuf /
+COPY --from=atk /atk /
+COPY --from=libepoxy /libepoxy /
+COPY --from=wayland /wayland /
+COPY --from=libxkb /libxkb /
+COPY --from=mesa /mesa /
+COPY --from=gtk3 /gtk3 /
+ARG GTKLAYERSHELL_VERSION=0.8.2
+RUN mkdir -p /gtk-layer-shell
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/wmww/gtk-layer-shell/archive/refs/tags/v${GTKLAYERSHELL_VERSION}.tar.gz -o g.tar.gz && tar -xf g.tar.gz && rm g.tar.gz && mv gtk-layer-shell-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dintrospection=false -Dvapi=false -Dexamples=false -Ddocs=false -Dtests=false
+RUN DESTDIR=/gtk-layer-shell ninja -C buildDir install
+
+FROM toolchain AS jsoncpp
+ARG JSONCPP_VERSION=1.9.6
+RUN mkdir -p /jsoncpp
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/open-source-parsers/jsoncpp/archive/refs/tags/${JSONCPP_VERSION}.tar.gz -o j.tar.gz && tar -xf j.tar.gz && rm j.tar.gz && mv jsoncpp-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dtests=false
+RUN DESTDIR=/jsoncpp ninja -C buildDir install
+
+FROM toolchain AS libfmt
+ARG FMT_VERSION=10.2.1
+RUN mkdir -p /libfmt
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/fmtlib/fmt/archive/refs/tags/${FMT_VERSION}.tar.gz -o f.tar.gz && tar -xf f.tar.gz && rm f.tar.gz && mv fmt-* src
+WORKDIR /build/src
+RUN cmake -B buildDir -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=MinSizeRel -DBUILD_SHARED_LIBS=ON -DFMT_TEST=OFF -DFMT_DOC=OFF
+RUN cmake --build buildDir -j"$(nproc)" && DESTDIR=/libfmt cmake --install buildDir
+
+FROM toolchain AS spdlog
+COPY --from=libfmt /libfmt /
+ARG SPDLOG_VERSION=1.13.0
+RUN mkdir -p /spdlog
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/gabime/spdlog/archive/refs/tags/v${SPDLOG_VERSION}.tar.gz -o s.tar.gz && tar -xf s.tar.gz && rm s.tar.gz && mv spdlog-* src
+WORKDIR /build/src
+RUN cmake -B buildDir -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=MinSizeRel -DBUILD_SHARED_LIBS=ON -DSPDLOG_FMT_EXTERNAL=ON -DSPDLOG_BUILD_EXAMPLE=OFF -DSPDLOG_BUILD_TESTS=OFF
+RUN cmake --build buildDir -j"$(nproc)" && DESTDIR=/spdlog cmake --install buildDir
+
+# Howard Hinnant date — waybar's clock module timezone support (header + tz lib).
+# Provided as a system dep so waybar's meson doesn't reach out to wrapdb.
+FROM toolchain AS cpp-date
+ARG DATE_VERSION=3.0.1
+RUN mkdir -p /cpp-date
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/HowardHinnant/date/archive/refs/tags/v${DATE_VERSION}.tar.gz -o d.tar.gz && tar -xf d.tar.gz && rm d.tar.gz && mv date-* src
+WORKDIR /build/src
+RUN cmake -B buildDir -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_BUILD_TYPE=MinSizeRel -DBUILD_SHARED_LIBS=ON -DBUILD_TZ_LIB=ON -DUSE_SYSTEM_TZ_DB=ON
+RUN cmake --build buildDir -j"$(nproc)" && DESTDIR=/cpp-date cmake --install buildDir
+
+# libdbusmenu-gtk3 — backend for waybar's SNI system tray (hosts external
+# applet icons). The musl-from-source toolchain has no intltool/gettext, so we
+# neuter the configure-time intltool version check (it only gates translation
+# catalogs we don't ship) and build just the two library subdirs, skipping the
+# po/ translation dir that actually needs intltool-merge at make time.
+FROM toolchain AS libdbusmenu
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+COPY --from=cairo /cairo /
+COPY --from=pango /pango /
+COPY --from=harfbuzz /harfbuzz /
+COPY --from=fribidi /fribidi /
+COPY --from=freetype /freetype /
+COPY --from=fontconfig /fontconfig /
+COPY --from=libpng /libpng /
+COPY --from=pixman /pixman /
+COPY --from=gdk-pixbuf /gdk-pixbuf /
+COPY --from=atk /atk /
+COPY --from=libepoxy /libepoxy /
+COPY --from=wayland /wayland /
+COPY --from=libxkb /libxkb /
+COPY --from=mesa /mesa /
+COPY --from=gtk3 /gtk3 /
+ARG LIBDBUSMENU_VERSION=16.04.0
+RUN mkdir -p /libdbusmenu
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://launchpad.net/libdbusmenu/16.04/${LIBDBUSMENU_VERSION}/+download/libdbusmenu-${LIBDBUSMENU_VERSION}.tar.gz -o d.tar.gz && tar -xf d.tar.gz && rm d.tar.gz && mv libdbusmenu-* src
+WORKDIR /build/src
+# Stub intltool: configure checks for intltool-update/merge/extract in PATH and
+# parses --version. We don't build translations (only the two lib subdirs), so
+# stubs that report a recent version and no-op are enough to get past configure.
+RUN printf '#!/bin/sh\n[ "$1" = "--version" ] && echo "intltool-update (intltool) 0.51.0"\nexit 0\n' > /usr/bin/intltool-update \
+    && printf '#!/bin/sh\nexit 0\n' > /usr/bin/intltool-merge \
+    && printf '#!/bin/sh\nexit 0\n' > /usr/bin/intltool-extract \
+    && chmod +x /usr/bin/intltool-update /usr/bin/intltool-merge /usr/bin/intltool-extract
+# intltool also insists on GNU gettext tools; the toolchain has none. Stub the
+# few configure probes for. po/ (which would actually run them) is not built.
+RUN for t in msgfmt gmsgfmt xgettext msgmerge msgcat msguniq msginit msgconv msgen msgfilter; do \
+        printf '#!/bin/sh\ncase "$1" in --version) echo "%s (GNU gettext-tools) 0.21" ;; esac\nexit 0\n' "$t" > /usr/bin/$t \
+        && chmod +x /usr/bin/$t; \
+    done
+# intltool's configure probe `perl -e "require XML::Parser"`; provide a stub
+# module so it resolves (only po/ would actually parse XML, and we skip po/).
+RUN mkdir -p /usr/share/perl5/vendor_perl/XML \
+    && printf 'package XML::Parser;\n$VERSION = "2.46";\n1;\n' > /usr/share/perl5/vendor_perl/XML/Parser.pm
+# Disable the tests path leaves AM_CONDITIONALs (HAVE_VALGRIND, ...) defined only
+# in that branch, so configure's "conditional X was never defined" sanity guards
+# abort. Neuter those guards — the lib subdirs we build don't use the conditionals.
+RUN sed -i 's/if test -z "${[A-Z_]*_TRUE}" && test -z "${[A-Z_]*_FALSE}"; then/if false; then/g' configure
+RUN ./configure ${COMMON_CONFIGURE_ARGS} --with-gtk=3 --disable-introspection --disable-vala --disable-gtk-doc --disable-dumper --disable-tests --disable-static --disable-nls
+# This 2016 codebase uses G_TYPE_INSTANCE_GET_PRIVATE, now a deprecation that
+# -Werror promotes to a hard error against modern GLib. Strip -Werror.
+RUN find . -name Makefile -exec sed -i 's/-Werror//g' {} +
+# Build/install only the libraries (libdbusmenu-glib + libdbusmenu-gtk); the
+# po/, docs/ and tools/ subdirs need intltool/gtk-doc we don't have.
+RUN make -C libdbusmenu-glib -j"$(nproc)" && make -C libdbusmenu-gtk -j"$(nproc)" \
+    && make -C libdbusmenu-glib DESTDIR=/libdbusmenu install \
+    && make -C libdbusmenu-gtk  DESTDIR=/libdbusmenu install
 
 # wlroots — compositor library (shared with doom)
 # libseat — built with the systemd-logind backend (libsystemd from toolchain).
@@ -842,6 +1160,70 @@ RUN meson setup buildDir ${COMMON_MESON_FLAGS} \
     -Delogind=disabled -Dsystemd=enabled -Dsystemd-user-service=true -Dsystemd-system-service=false
 RUN DESTDIR=/wireplumber ninja -C buildDir install
 
+# --- waybar — the status bar / panel ---------------------------------------
+# Native modules drive NetworkManager / WirePlumber / BlueZ directly (clickable
+# wifi, volume, bluetooth), plus an SNI system tray (libdbusmenu) for external
+# applet icons. Click actions reuse the fuzzel sway-wifi-menu / sway-audio-menu.
+# Defined after wireplumber/pipewire so every COPY --from resolves backwards.
+FROM toolchain AS waybar
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+COPY --from=cairo /cairo /
+COPY --from=pango /pango /
+COPY --from=harfbuzz /harfbuzz /
+COPY --from=fribidi /fribidi /
+COPY --from=freetype /freetype /
+COPY --from=fontconfig /fontconfig /
+COPY --from=libpng /libpng /
+COPY --from=pixman /pixman /
+COPY --from=gdk-pixbuf /gdk-pixbuf /
+COPY --from=atk /atk /
+COPY --from=libepoxy /libepoxy /
+COPY --from=wayland /wayland /
+COPY --from=libxkb /libxkb /
+COPY --from=mesa /mesa /
+COPY --from=gtk3 /gtk3 /
+COPY --from=libsigcpp /libsigcpp /
+COPY --from=glibmm /glibmm /
+COPY --from=cairomm /cairomm /
+COPY --from=pangomm /pangomm /
+COPY --from=atkmm /atkmm /
+COPY --from=gtkmm3 /gtkmm3 /
+COPY --from=gtk-layer-shell /gtk-layer-shell /
+COPY --from=jsoncpp /jsoncpp /
+COPY --from=libfmt /libfmt /
+COPY --from=spdlog /spdlog /
+COPY --from=libnl /libnl /
+COPY --from=cpp-date /cpp-date /
+COPY --from=libdbusmenu /libdbusmenu /
+COPY --from=pipewire /pipewire /
+COPY --from=wireplumber /wireplumber /
+ARG WAYBAR_VERSION=0.10.4
+RUN mkdir -p /waybar
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/Alexays/Waybar/archive/refs/tags/${WAYBAR_VERSION}.tar.gz -o w.tar.gz && tar -xf w.tar.gz && rm w.tar.gz && mv Waybar-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+# Enable the modules the desktop uses (tray=dbusmenu-gtk, network=libnl,
+# audio=wireplumber); gtk-layer-shell is a hard dep. Disable the rest so meson
+# doesn't reach for libs we don't ship (pulse/jack/mpd/sndio/cava).
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} \
+      -Dlibcxx=false -Ddbusmenu-gtk=enabled -Dlibnl=enabled \
+      -Dwireplumber=enabled -Dpulseaudio=disabled \
+      -Dmpris=disabled -Djack=disabled -Dmpd=disabled -Dsndio=disabled \
+      -Dcava=disabled -Dexperimental=false -Dman-pages=disabled -Dtests=disabled
+RUN DESTDIR=/waybar ninja -C buildDir install
+
+# Nerd Font symbols — waybar/foot glyphs (wifi/bt/volume icons). Symbols-only
+# subset keeps it small; installed to /usr/share/fonts and picked up by fc-cache.
+FROM toolchain AS nerdfont
+ARG NERDFONT_VERSION=3.1.1
+RUN mkdir -p /nerdfont/usr/share/fonts/nerd-fonts
+WORKDIR /tmp
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/ryanoasis/nerd-fonts/releases/download/v${NERDFONT_VERSION}/NerdFontsSymbolsOnly.tar.xz -o n.tar.xz \
+    && tar -xf n.tar.xz -C /nerdfont/usr/share/fonts/nerd-fonts SymbolsNerdFont-Regular.ttf SymbolsNerdFontMono-Regular.ttf \
+    && rm n.tar.xz
+
 
 # ===========================================================================
 # M5: desktop polish — wallpaper, notifications, launcher, clipboard, etc.
@@ -1109,6 +1491,25 @@ COPY --from=fuzzel /fuzzel /
 COPY --from=wl-clipboard /wl-clipboard /
 COPY --from=slurp /slurp /
 COPY --from=swayidle /swayidle /
+# waybar — status bar + its GTK3/gtkmm/tray runtime stack and Nerd Font glyphs
+COPY --from=gtk3 /gtk3 /
+COPY --from=gdk-pixbuf /gdk-pixbuf /
+COPY --from=atk /atk /
+COPY --from=libepoxy /libepoxy /
+COPY --from=libsigcpp /libsigcpp /
+COPY --from=glibmm /glibmm /
+COPY --from=cairomm /cairomm /
+COPY --from=pangomm /pangomm /
+COPY --from=atkmm /atkmm /
+COPY --from=gtkmm3 /gtkmm3 /
+COPY --from=gtk-layer-shell /gtk-layer-shell /
+COPY --from=jsoncpp /jsoncpp /
+COPY --from=libfmt /libfmt /
+COPY --from=spdlog /spdlog /
+COPY --from=cpp-date /cpp-date /
+COPY --from=libdbusmenu /libdbusmenu /
+COPY --from=waybar /waybar /
+COPY --from=nerdfont /nerdfont /
 # Login manager (ly) + its X protocol libs
 COPY --from=libxau /libxau /
 COPY --from=libxcb /libxcb /
@@ -1125,6 +1526,9 @@ COPY --from=toolchain /usr/lib/libjson-c.so* /usr/lib/
 COPY --from=toolchain /usr/lib/libstdc++.so.6* /usr/lib/
 COPY --from=toolchain /usr/lib/libgcc_s.so* /usr/lib/
 COPY --from=toolchain /usr/lib/libreadline.so* /usr/lib/
+# libxml2 — pulled by libxkbregistry (waybar links it; sway uses libxkbcommon
+# and never loads it, which is why this only surfaces with waybar present).
+COPY --from=toolchain /usr/lib/libxml2.so* /usr/lib/
 # M6: optional real-hardware firmware (empty unless FIRMWARE=true)
 COPY --from=firmware /firmware /
 # Static config / launch layer
@@ -1134,6 +1538,8 @@ COPY rootfs/ /
 # the persistent /home. We only ensure the groups it will join exist, enable
 # the system services, and configure the ly display manager on tty1.
 RUN ldconfig 2>/dev/null || true; \
+    # Register the bundled Nerd Font symbols so waybar/foot resolve the glyphs.
+    fc-cache -f 2>/dev/null || true; \
     for g in audio video render input bluetooth seat; do groupadd -f "$g"; done; \
     # start-sway lives in /usr/bin (NOT /usr/local): Kairos mounts /usr/local
     # from the persistent partition on the installed system, which shadows
@@ -1169,5 +1575,9 @@ RUN ldconfig 2>/dev/null || true; \
     systemctl enable NetworkManager.service wpa_supplicant.service 2>/dev/null || true; \
     # M3: PipeWire + WirePlumber as per-user services
     systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service 2>/dev/null || true; \
-    # M4: Bluetooth daemon
-    systemctl enable bluetooth.service 2>/dev/null || true
+    # M4: Bluetooth daemon. `enable` only links it into bluetooth.target.wants,
+    # but Kairos forces multi-user.target (bluetooth.target is never reached), so
+    # like ly it must be pulled into multi-user.target directly or bluetoothd
+    # never starts and bluetoothctl hangs on "waiting for bluetoothd".
+    systemctl enable bluetooth.service 2>/dev/null || true; \
+    ln -sf /usr/lib/systemd/system/bluetooth.service /etc/systemd/system/multi-user.target.wants/bluetooth.service

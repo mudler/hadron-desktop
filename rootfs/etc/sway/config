@@ -52,6 +52,10 @@ input type:keyboard {
 }
 
 ### Autostart #############################################################
+# Audio stack: PipeWire + WirePlumber for this session (drives wpctl, the media
+# keys and waybar's volume module). Harmless if a user systemd unit already ran.
+exec /usr/bin/pipewire
+exec /usr/bin/wireplumber
 exec mako
 exec swayidle -w timeout 600 'swaymsg "output * dpms off"' resume 'swaymsg "output * dpms on"'
 exec $term
@@ -157,22 +161,11 @@ bindsym $mod+Shift+b exec foot --app-id=floatterm -T bluetooth bluetoothctl
 for_window [app_id="floatterm"] floating enable, resize set 820 520, move position center
 
 ### Status bar ############################################################
-# Themed built-in swaybar.
+# waybar (Tokyo Night) — config at /etc/xdg/waybar/{config,style.css}. Modules:
+# workspaces, clock, network (click → sway-wifi-menu), bluetooth, wireplumber
+# (audio), cpu/memory/battery and an SNI system tray for applet icons.
 bar {
-    position top
-    height 28
-    font pango:DejaVu Sans 10
-    separator_symbol "  ·  "
-    status_command while date +'  %a %d %b   %H:%M  '; do sleep 20; done
-    colors {
-        background $bg
-        statusline $fg
-        separator  $grey
-        focused_workspace  $blue   $blue   $bg
-        active_workspace   $bg_alt $bg_alt $fg
-        inactive_workspace $bg     $bg     $grey
-        urgent_workspace   $red    $red    $bg
-    }
+    swaybar_command waybar
 }
 
 # Drop-ins for local overrides
