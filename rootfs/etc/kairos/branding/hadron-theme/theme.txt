@@ -1,0 +1,81 @@
+# Hadron Desktop GRUB theme — Tokyo Night.
+#
+# gfxterm theme matching the ly login + waybar palette. Used by the installed
+# system's boot menu (grubmenu.cfg switches to gfxterm and `set theme=` to this
+# file, which the 09_hadron_grub_theme oem stage places on COS_STATE alongside
+# background.tga). desktop-image is resolved relative to this file, so the bare
+# filename works once the whole hadron-theme dir lands in themes/hadron/.
+#
+# Image is TGA, not PNG: GRUB's png.mod rejects valid PNGs with "unsupported
+# format", which makes gfxmenu discard the entire theme; tga.mod decodes cleanly.
+# Font: the installed EFI GRUB ships no unicode.pf2, so grubmenu.cfg loadfont's our
+# vendored unicode.pf2 (registered as "Unifont Regular 16") from STATE first.
+
+desktop-image: "background.tga"
+title-text: ""
+terminal-font: "Unifont Regular 16"
+
+# Brand wordmark (Tokyo Night blue / muted comment).
++ label {
+    id    = "__brand__"
+    top   = 15%
+    left  = 0
+    width = 100%
+    align = "center"
+    color = "#7aa2f7"
+    font  = "Unifont Regular 16"
+    text  = "H A D R O N   D E S K T O P"
+}
++ label {
+    top   = 15%+26
+    left  = 0
+    width = 100%
+    align = "center"
+    color = "#565f89"
+    font  = "Unifont Regular 16"
+    text  = "sway · wayland · kairos"
+}
+
+# Boot menu: foreground text dim, selected entry hot cyan.
++ boot_menu {
+    left                 = 28%
+    width                = 44%
+    top                  = 38%
+    height               = 38%
+    item_font            = "Unifont Regular 16"
+    item_color           = "#a9b1d6"
+    selected_item_color  = "#7dcfff"
+    item_height          = 26
+    item_padding         = 6
+    item_spacing         = 6
+    icon_width           = 0
+    icon_height          = 0
+    scrollbar            = false
+}
+
+# Timeout countdown as a blue progress bar.
++ progress_bar {
+    id           = "__timeout__"
+    left         = 28%
+    width        = 44%
+    top          = 80%
+    height       = 16
+    show_text    = true
+    font         = "Unifont Regular 16"
+    text_color   = "#565f89"
+    fg_color     = "#7aa2f7"
+    bg_color     = "#1a1b26"
+    border_color = "#3b4261"
+    text         = "@TIMEOUT_NOTIFICATION_MIDDLE@"
+}
+
+# Footer hint.
++ label {
+    top   = 90%
+    left  = 0
+    width = 100%
+    align = "center"
+    color = "#565f89"
+    font  = "Unifont Regular 16"
+    text  = "up/down select   enter boot   e edit   c console"
+}

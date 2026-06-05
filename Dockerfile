@@ -2032,6 +2032,11 @@ RUN ldconfig 2>/dev/null || true; \
     # never starts and bluetoothctl hangs on "waiting for bluetoothd".
     systemctl enable bluetooth.service 2>/dev/null || true; \
     ln -sf /usr/lib/systemd/system/bluetooth.service /etc/systemd/system/multi-user.target.wants/bluetooth.service; \
+    # Boot splash: the base image ships /usr/bin/hadron-splash (animated "HADRON"
+    # ASCII, self-limits to ~5s). Pull it into multi-user.target like ly; the unit
+    # is ordered Before=ly@tty1.service so it renders on tty1 before the login.
+    systemctl enable hadron-splash.service 2>/dev/null || true; \
+    ln -sf /usr/lib/systemd/system/hadron-splash.service /etc/systemd/system/multi-user.target.wants/hadron-splash.service; \
     # Podman rootless: the newuid/newgid + fuse mount helpers must be setuid-root
     # for unprivileged user-namespace and fuse-overlayfs setup.
     for h in /usr/bin/newuidmap /usr/sbin/newuidmap /usr/bin/newgidmap /usr/sbin/newgidmap /usr/bin/fusermount3 /usr/bin/fusermount; do \
@@ -2072,12 +2077,20 @@ RUN --mount=type=bind,from=kairos-init,src=/kairos-init,dst=/kairos-init \
 # name is unset, preferring it over /etc/os-release. The OS identity fields in
 # /etc/os-release are intentionally left untouched.
 RUN echo 'GRUB_ENTRY_NAME="hadron-desktop"' >> /etc/kairos-release
-# Tokyo Night GRUB menu colours. The menu renders from COS_STATE before the
-# rootfs, so we can't ship a gfxterm background image/font there; instead inject
-# text-mode colours (GRUB's 16-colour set, so cyan/blue accents on the dark
-# default) into /etc/cos/grub.cfg, which the installer copies to the boot
-# partition's grub.cfg. Inserted after `loadfont unicode`, before the menu.
+# Tokyo Night GRUB menu colours — text-mode fallback. The main menu renders from
+# /etc/cos/grub.cfg (copied to COS_STATE at install) before grubmenu.cfg switches
+# to the gfxterm theme, and these 16-colour accents also apply if gfxterm/the
+# theme ever fail to load. Inserted after `loadfont unicode`, before the menu.
 RUN sed -i '/^loadfont unicode/a set color_normal=light-gray/black\nset color_highlight=black/cyan\nset menu_color_normal=cyan/black\nset menu_color_highlight=black/cyan' /etc/cos/grub.cfg
+# Tokyo Night gfxterm theme with a background image. kairos-init's branding stage
+# writes its own /etc/kairos/branding/grubmenu.cfg (bundled.ExtraGrubCfg),
+# clobbering the overlay copy, so re-apply ours AFTER kairos-init: it switches the
+# installed menu to gfxterm and `set theme=` to themes/hadron/theme.txt. 08_grub
+# copies this to COS_STATE/grubmenu at install; 09_hadron_grub_theme.yaml (oem)
+# puts the theme dir (theme.txt + background.tga), the vendored unicode.pf2 font,
+# and the grub module tree on STATE so gfxmenu/tga/the theme all resolve there.
+# (hadron-theme/ isn't written by kairos-init, so its COPY at line ~1982 survives.)
+COPY rootfs/etc/kairos/branding/grubmenu.cfg /etc/kairos/branding/grubmenu.cfg
 # kairos-init regenerates /etc/motd (and may touch /etc/issue); re-apply the
 # branded console banners on top.
 COPY rootfs/etc/issue rootfs/etc/motd /etc/

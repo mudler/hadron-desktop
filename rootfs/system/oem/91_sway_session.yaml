@@ -18,5 +18,9 @@ stages:
       commands:
         - mkdir -p /etc/systemd/system/multi-user.target.wants
         - ln -sf /usr/lib/systemd/system/ly@.service /etc/systemd/system/multi-user.target.wants/ly@tty1.service
+        - ln -sf /usr/lib/systemd/system/hadron-splash.service /etc/systemd/system/multi-user.target.wants/hadron-splash.service
         - systemctl daemon-reload
+        # Render the boot splash on tty1 first (oneshot, ~5s, RemainAfterExit so
+        # this is a no-op if it already played via the baked symlink), then ly.
+        - systemctl start hadron-splash.service || true
         - systemctl start ly@tty1.service || true
