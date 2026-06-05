@@ -1,0 +1,21 @@
+# Rootless podman setup for the installed desktop.
+#
+# Podman rootless needs /etc/subuid + /etc/subgid ranges for the user. The
+# desktop user is created at install time (not in the image), and Kairos manages
+# /etc as a non-persistent overlay, so we (re)populate the ranges on every boot
+# for each human user that lacks them — idempotent and cheap.
+#
+# Guarded to skip the live/installer boot (no desktop user exists yet there).
+name: "podman rootless setup"
+stages:
+  boot:
+    - if: '! grep -q "install-mode" /proc/cmdline && [ ! -f /run/cos/live_mode ]'
+      name: "ensure subuid/subgid ranges for desktop users"
+      commands:
+        - |
+          base=100000; size=65536; i=0
+          for u in $(awk -F: '$3>=1000 && $3<60000 {print $1}' /etc/passwd); do
+            grep -q "^$u:" /etc/subuid 2>/dev/null || echo "$u:$((base + i*size)):$size" >> /etc/subuid
+            grep -q "^$u:" /etc/subgid 2>/dev/null || echo "$u:$((base + i*size)):$size" >> /etc/subgid
+            i=$((i+1))
+          done

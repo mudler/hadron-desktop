@@ -1224,6 +1224,32 @@ RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/rya
     && tar -xf n.tar.xz -C /nerdfont/usr/share/fonts/nerd-fonts SymbolsNerdFont-Regular.ttf SymbolsNerdFontMono-Regular.ttf \
     && rm n.tar.xz
 
+# --- podman — rootless OCI containers --------------------------------------
+# Podman is Go and its network stack (netavark/aardvark) is Rust; the musl
+# toolchain has neither, so we vendor the fully-static podman-static bundle
+# (podman+crun+runc+conmon+netavark+aardvark-dns+slirp/pasta+fuse-overlayfs+
+# catatonit — all statically linked, no libc dependency). The bundle installs
+# under /usr/local, which on the installed system is the COS_PERSISTENT mount
+# that SHADOWS baked content, so we relocate it to /usr (binaries -> /usr/bin,
+# helpers -> /usr/lib/podman, where podman looks by default).
+FROM toolchain AS podman
+ARG PODMAN_STATIC_VERSION=5.8.2
+RUN mkdir -p /podman/usr/bin /podman/usr/lib /podman/etc
+WORKDIR /tmp
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/mgoltzsche/podman-static/releases/download/v${PODMAN_STATIC_VERSION}/podman-linux-amd64.tar.gz -o p.tar.gz \
+    && tar -xf p.tar.gz && rm p.tar.gz \
+    && cp -a podman-linux-amd64/usr/local/bin/.     /podman/usr/bin/ \
+    && cp -a podman-linux-amd64/usr/local/lib/podman /podman/usr/lib/ \
+    && cp -a podman-linux-amd64/etc/containers        /podman/etc/ \
+    && rm -rf podman-linux-amd64
+# Pin helper paths: podman's built-in search list looks in /usr/libexec/podman
+# and /usr/local/... — both Kairos-shadowed persistent mounts on the installed
+# system. /usr/lib is part of the immutable image, so point podman there. Also
+# repoint storage.conf's fuse-overlayfs mount_program from the bundle's
+# /usr/local/bin to the relocated /usr/bin.
+RUN sed -i '/^\[engine\]/a conmon_path = ["/usr/lib/podman/conmon"]\nhelper_binaries_dir = ["/usr/lib/podman"]' /podman/etc/containers/containers.conf \
+    && sed -i 's|/usr/local/bin/|/usr/bin/|g' /podman/etc/containers/storage.conf
+
 
 # ===========================================================================
 # M5: desktop polish — wallpaper, notifications, launcher, clipboard, etc.
@@ -1529,6 +1555,9 @@ COPY --from=toolchain /usr/lib/libreadline.so* /usr/lib/
 # libxml2 — pulled by libxkbregistry (waybar links it; sway uses libxkbcommon
 # and never loads it, which is why this only surfaces with waybar present).
 COPY --from=toolchain /usr/lib/libxml2.so* /usr/lib/
+# Podman (static bundle): binaries -> /usr/bin, helpers -> /usr/lib/podman,
+# default container config -> /etc/containers.
+COPY --from=podman /podman /
 # M6: optional real-hardware firmware (empty unless FIRMWARE=true)
 COPY --from=firmware /firmware /
 # Static config / launch layer
@@ -1580,4 +1609,11 @@ RUN ldconfig 2>/dev/null || true; \
     # like ly it must be pulled into multi-user.target directly or bluetoothd
     # never starts and bluetoothctl hangs on "waiting for bluetoothd".
     systemctl enable bluetooth.service 2>/dev/null || true; \
-    ln -sf /usr/lib/systemd/system/bluetooth.service /etc/systemd/system/multi-user.target.wants/bluetooth.service
+    ln -sf /usr/lib/systemd/system/bluetooth.service /etc/systemd/system/multi-user.target.wants/bluetooth.service; \
+    # Podman rootless: the newuid/newgid + fuse mount helpers must be setuid-root
+    # for unprivileged user-namespace and fuse-overlayfs setup. subuid/subgid for
+    # the (install-time) desktop user are populated each boot by 92_podman.yaml.
+    for h in /usr/bin/newuidmap /usr/sbin/newuidmap /usr/bin/newgidmap /usr/sbin/newgidmap /usr/bin/fusermount3 /usr/bin/fusermount; do \
+        [ -e "$h" ] && chmod u+s "$h" || true; \
+    done; \
+    touch /etc/subuid /etc/subgid; chmod 644 /etc/subuid /etc/subgid
