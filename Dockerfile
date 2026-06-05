@@ -1224,6 +1224,252 @@ RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/rya
     && tar -xf n.tar.xz -C /nerdfont/usr/share/fonts/nerd-fonts SymbolsNerdFont-Regular.ttf SymbolsNerdFontMono-Regular.ttf \
     && rm n.tar.xz
 
+# --- podman — rootless OCI containers --------------------------------------
+# Podman is Go and its network stack (netavark/aardvark) is Rust; the musl
+# toolchain has neither, so we vendor the fully-static podman-static bundle
+# (podman+crun+runc+conmon+netavark+aardvark-dns+slirp/pasta+fuse-overlayfs+
+# catatonit — all statically linked, no libc dependency). The bundle installs
+# under /usr/local, which on the installed system is the COS_PERSISTENT mount
+# that SHADOWS baked content, so we relocate it to /usr (binaries -> /usr/bin,
+# helpers -> /usr/lib/podman, where podman looks by default).
+FROM toolchain AS podman
+ARG PODMAN_STATIC_VERSION=5.8.2
+RUN mkdir -p /podman/usr/bin /podman/usr/lib /podman/etc
+WORKDIR /tmp
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/mgoltzsche/podman-static/releases/download/v${PODMAN_STATIC_VERSION}/podman-linux-amd64.tar.gz -o p.tar.gz \
+    && tar -xf p.tar.gz && rm p.tar.gz \
+    && cp -a podman-linux-amd64/usr/local/bin/.     /podman/usr/bin/ \
+    && cp -a podman-linux-amd64/usr/local/lib/podman /podman/usr/lib/ \
+    && cp -a podman-linux-amd64/etc/containers        /podman/etc/ \
+    && rm -rf podman-linux-amd64
+# Pin helper paths: podman's built-in search list looks in /usr/libexec/podman
+# and /usr/local/... — both Kairos-shadowed persistent mounts on the installed
+# system. /usr/lib is part of the immutable image, so point podman there. Also
+# repoint storage.conf's fuse-overlayfs mount_program from the bundle's
+# /usr/local/bin to the relocated /usr/bin.
+RUN sed -i '/^\[engine\]/a conmon_path = ["/usr/lib/podman/conmon"]\nhelper_binaries_dir = ["/usr/lib/podman"]' /podman/etc/containers/containers.conf \
+    && sed -i 's|/usr/local/bin/|/usr/bin/|g' /podman/etc/containers/storage.conf
+
+# --- flatpak support libraries ---------------------------------------------
+# libarchive — OCI/bundle handling for ostree + flatpak (zlib/lzma/zstd/openssl
+# all come from the toolchain).
+FROM toolchain AS libarchive
+ARG LIBARCHIVE_VERSION=3.8.7
+RUN mkdir -p /libarchive
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/libarchive/libarchive/releases/download/v${LIBARCHIVE_VERSION}/libarchive-${LIBARCHIVE_VERSION}.tar.gz -o a.tar.gz && tar -xf a.tar.gz && rm a.tar.gz && mv libarchive-* src
+WORKDIR /build/src
+RUN ./configure ${COMMON_CONFIGURE_ARGS} --disable-bsdtar --disable-bsdcpio --disable-bsdcat --without-xml2 --without-expat
+RUN make -j"$(nproc)" && make DESTDIR=/libarchive install
+
+FROM toolchain AS json-glib
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+ARG JSONGLIB_VERSION=1.10.8
+RUN mkdir -p /json-glib
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://download.gnome.org/sources/json-glib/1.10/json-glib-${JSONGLIB_VERSION}.tar.xz -o j.tar.xz && tar -xf j.tar.xz && rm j.tar.xz && mv json-glib-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dintrospection=disabled -Ddocumentation=disabled -Dgtk_doc=disabled -Dman=false -Dtests=false
+RUN DESTDIR=/json-glib ninja -C buildDir install
+
+FROM toolchain AS bubblewrap
+ARG BWRAP_VERSION=0.11.2
+RUN mkdir -p /bubblewrap
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/containers/bubblewrap/releases/download/v${BWRAP_VERSION}/bubblewrap-${BWRAP_VERSION}.tar.xz -o b.tar.xz && tar -xf b.tar.xz && rm b.tar.xz && mv bubblewrap-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dman=disabled -Dtests=false -Dselinux=disabled -Drequire_userns=false
+RUN DESTDIR=/bubblewrap ninja -C buildDir install
+
+FROM toolchain AS xdg-dbus-proxy
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+ARG XDP_VERSION=0.1.7
+RUN mkdir -p /xdg-dbus-proxy
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/flatpak/xdg-dbus-proxy/releases/download/${XDP_VERSION}/xdg-dbus-proxy-${XDP_VERSION}.tar.xz -o x.tar.xz && tar -xf x.tar.xz && rm x.tar.xz && mv xdg-dbus-proxy-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dman=disabled
+RUN DESTDIR=/xdg-dbus-proxy ninja -C buildDir install
+
+# GPG trio — flatpak 1.16 hard-requires libgpgme at build (runtime signature
+# verification additionally needs a gpg binary, which we don't ship; remotes are
+# added with --no-gpg-verify).
+FROM toolchain AS libgpg-error
+ARG LIBGPGERROR_VERSION=1.51
+RUN mkdir -p /libgpg-error
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://www.gnupg.org/ftp/gcrypt/libgpg-error/libgpg-error-${LIBGPGERROR_VERSION}.tar.bz2 -o g.tar.bz2 && tar -xf g.tar.bz2 && rm g.tar.bz2 && mv libgpg-error-* src
+WORKDIR /build/src
+RUN ./configure ${COMMON_CONFIGURE_ARGS} --disable-doc --disable-tests --enable-install-gpg-error-config
+RUN make -j"$(nproc)" && make DESTDIR=/libgpg-error install
+
+FROM toolchain AS libassuan
+COPY --from=libgpg-error /libgpg-error /
+ARG LIBASSUAN_VERSION=3.0.2
+RUN mkdir -p /libassuan
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://www.gnupg.org/ftp/gcrypt/libassuan/libassuan-${LIBASSUAN_VERSION}.tar.bz2 -o a.tar.bz2 && tar -xf a.tar.bz2 && rm a.tar.bz2 && mv libassuan-* src
+WORKDIR /build/src
+RUN ./configure ${COMMON_CONFIGURE_ARGS} --disable-doc
+RUN make -j"$(nproc)" && make DESTDIR=/libassuan install
+
+FROM toolchain AS gpgme
+COPY --from=libgpg-error /libgpg-error /
+COPY --from=libassuan /libassuan /
+ARG GPGME_VERSION=1.24.3
+RUN mkdir -p /gpgme
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://www.gnupg.org/ftp/gcrypt/gpgme/gpgme-${GPGME_VERSION}.tar.bz2 -o g.tar.bz2 && tar -xf g.tar.bz2 && rm g.tar.bz2 && mv gpgme-* src
+WORKDIR /build/src
+# musl lacks the glibc transitional ino64_t/off64_t types gpgme's posix-io.c
+# uses; _LARGEFILE64_SOURCE makes musl expose them as off_t aliases.
+RUN CPPFLAGS="-D_LARGEFILE64_SOURCE" ./configure ${COMMON_CONFIGURE_ARGS} --disable-gpg-test --disable-gpgsm-test --disable-g13-test --enable-languages=cpp --disable-doc
+RUN make -j"$(nproc)" && make DESTDIR=/gpgme install
+
+# AppStream trio — flatpak 1.16 hard-requires libappstream at build.
+FROM toolchain AS libyaml
+ARG LIBYAML_VERSION=0.2.5
+RUN mkdir -p /libyaml
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/yaml/libyaml/releases/download/${LIBYAML_VERSION}/yaml-${LIBYAML_VERSION}.tar.gz -o y.tar.gz && tar -xf y.tar.gz && rm y.tar.gz && mv yaml-* src
+WORKDIR /build/src
+RUN ./configure ${COMMON_CONFIGURE_ARGS}
+RUN make -j"$(nproc)" && make DESTDIR=/libyaml install
+
+FROM toolchain AS libxmlb
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+ARG LIBXMLB_VERSION=0.3.22
+RUN mkdir -p /libxmlb
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/hughsie/libxmlb/releases/download/${LIBXMLB_VERSION}/libxmlb-${LIBXMLB_VERSION}.tar.xz -o x.tar.xz && tar -xf x.tar.xz && rm x.tar.xz && mv libxmlb-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dintrospection=false -Dgtkdoc=false -Dtests=false -Dstemmer=false -Dcli=false
+RUN DESTDIR=/libxmlb ninja -C buildDir install
+
+FROM toolchain AS appstream
+COPY --from=gperf /gperf /
+COPY --from=libxslt /libxslt /
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+COPY --from=libyaml /libyaml /
+COPY --from=libxmlb /libxmlb /
+ARG APPSTREAM_VERSION=1.0.4
+RUN mkdir -p /appstream
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://www.freedesktop.org/software/appstream/releases/AppStream-${APPSTREAM_VERSION}.tar.xz -o as.tar.xz && tar -xf as.tar.xz && rm as.tar.xz && mv AppStream-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+# No gettext in the toolchain: meson's i18n.gettext() returns void and the po/
+# build aborts. Stub the gettext tools so it resolves (translations are no-ops).
+RUN for t in xgettext msgmerge msginit msgcat msgconv msguniq; do \
+        printf '#!/bin/sh\ncase "$1" in --version) echo "%s (GNU gettext-tools) 0.21" ;; esac\nexit 0\n' "$t" > /usr/bin/$t && chmod +x /usr/bin/$t; \
+    done
+# msgfmt must emit a *valid* (empty) .mo so meson's po install step finds the
+# files it declared; a no-op would leave them missing.
+RUN printf '#!/bin/sh\ncase "$1" in --version) echo "msgfmt (GNU gettext-tools) 0.21"; exit 0;; esac\nout=""\nwhile [ $# -gt 0 ]; do case "$1" in -o) shift; out="$1";; --output-file=*) out="${1#*=}";; esac; shift; done\n[ -n "$out" ] && python3 -c "import struct,sys;open(sys.argv[1],\"wb\").write(struct.pack(\"<7I\",0x950412de,0,0,28,28,0,28))" "$out"\nexit 0\n' > /usr/bin/msgfmt && chmod +x /usr/bin/msgfmt
+# itstool only translates appstream-cli's own metainfo (not used by libappstream
+# that flatpak links). Stub it to copy the untranslated -j source to -o output.
+RUN printf '#!/bin/sh\nsrc=""; out=""\nwhile [ $# -gt 0 ]; do case "$1" in -j) shift; src="$1";; -o) shift; out="$1";; esac; shift; done\n[ -n "$out" ] && { [ -n "$src" ] && cp "$src" "$out" || : > "$out"; }\nexit 0\n' > /usr/bin/itstool && chmod +x /usr/bin/itstool
+# docs/ (man pages needing DocBook XSL), data/ (appstream-cli's translated
+# metainfo) and po/ (translations needing real gettext) are all unused by
+# libappstream — the only thing flatpak links — and each trips the missing
+# gettext/docbook toolchain, so drop all three subdirs.
+RUN : > docs/meson.build && : > data/meson.build && : > po/meson.build
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dstemming=false -Dsystemd=false -Dvapi=false -Dqt=false -Dcompose=false -Dgir=false -Dsvg-support=false -Ddocs=false -Dapidocs=false -Dinstall-docs=false -Dapt-support=false
+RUN DESTDIR=/appstream ninja -C buildDir install
+
+# libfuse3 — flatpak requires fuse (revokefs-fuse + the document portal).
+FROM toolchain AS libfuse3
+ARG LIBFUSE_VERSION=3.16.2
+RUN mkdir -p /libfuse3
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/libfuse/libfuse/releases/download/fuse-${LIBFUSE_VERSION}/fuse-${LIBFUSE_VERSION}.tar.gz -o f.tar.gz && tar -xf f.tar.gz && rm f.tar.gz && mv fuse-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dexamples=false -Dtests=false -Duseroot=false
+RUN DESTDIR=/libfuse3 ninja -C buildDir install
+# mount.fuse3 installs to /usr/sbin, but the image's /usr/sbin is a symlink to
+# bin — a real sbin dir here breaks the COPY into downstream stages. Relocate.
+RUN if [ -d /libfuse3/usr/sbin ]; then mkdir -p /libfuse3/usr/bin && cp -a /libfuse3/usr/sbin/. /libfuse3/usr/bin/ && rm -rf /libfuse3/usr/sbin; fi
+
+# e2fsprogs — ostree hard-requires libe2p (ext2 attribute flags). Build only the
+# libraries; reuse the toolchain's libuuid/libblkid instead of e2fsprogs' own.
+FROM toolchain AS e2fsprogs
+ARG E2FSPROGS_VERSION=1.47.2
+RUN mkdir -p /e2fsprogs
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v${E2FSPROGS_VERSION}/e2fsprogs-${E2FSPROGS_VERSION}.tar.gz -o e.tar.gz && tar -xf e.tar.gz && rm e.tar.gz && mv e2fsprogs-* src
+WORKDIR /build/src
+RUN ./configure ${COMMON_CONFIGURE_ARGS} --enable-elf-shlibs --disable-nls --disable-libuuid --disable-libblkid --disable-fuse2fs --disable-fsck
+RUN make -j"$(nproc)" libs && make install-libs DESTDIR=/e2fsprogs
+
+# --- ostree — the content store flatpak deploys apps from -------------------
+# libcurl/openssl/zlib/lzma/libmount/libsystemd all come from the toolchain.
+FROM toolchain AS ostree
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+COPY --from=libarchive /libarchive /
+COPY --from=libgpg-error /libgpg-error /
+COPY --from=libassuan /libassuan /
+COPY --from=gpgme /gpgme /
+COPY --from=e2fsprogs /e2fsprogs /
+ARG OSTREE_VERSION=2026.1
+RUN mkdir -p /ostree
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/ostreedev/ostree/releases/download/v${OSTREE_VERSION}/libostree-${OSTREE_VERSION}.tar.xz -o ot.tar.xz && tar -xf ot.tar.xz && rm ot.tar.xz && mv libostree-* src
+WORKDIR /build/src
+RUN ./configure ${COMMON_CONFIGURE_ARGS} \
+      --with-gpgme --with-curl --without-soup --with-crypto=openssl \
+      --with-libarchive --with-libsystemd --disable-rofiles-fuse \
+      --disable-introspection --disable-gtk-doc --disable-man --without-selinux
+RUN make -j"$(nproc)" && make DESTDIR=/ostree install
+
+# --- flatpak ---------------------------------------------------------------
+# Sandboxed app runtime. Uses our system bubblewrap / xdg-dbus-proxy /
+# fusermount3 (no bundled copies). libseccomp/libcap/libcurl/libxml2/libsystemd
+# come from the toolchain. GPG verification is built (gpgme) but has no gpg
+# binary at runtime, so remotes are added with --no-gpg-verify.
+FROM toolchain AS flatpak
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+COPY --from=libpng /libpng /
+COPY --from=gdk-pixbuf /gdk-pixbuf /
+COPY --from=libarchive /libarchive /
+COPY --from=json-glib /json-glib /
+COPY --from=libgpg-error /libgpg-error /
+COPY --from=libassuan /libassuan /
+COPY --from=gpgme /gpgme /
+COPY --from=libyaml /libyaml /
+COPY --from=libxmlb /libxmlb /
+COPY --from=appstream /appstream /
+COPY --from=libfuse3 /libfuse3 /
+COPY --from=bubblewrap /bubblewrap /
+COPY --from=xdg-dbus-proxy /xdg-dbus-proxy /
+COPY --from=ostree /ostree /
+ARG FLATPAK_VERSION=1.16.6
+RUN mkdir -p /flatpak
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/flatpak/flatpak/releases/download/${FLATPAK_VERSION}/flatpak-${FLATPAK_VERSION}.tar.xz -o fp.tar.xz && tar -xf fp.tar.xz && rm fp.tar.xz && mv flatpak-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja pyparsing
+# --libexecdir=lib keeps flatpak's helpers (session-helper, portal, ...) in
+# /usr/lib (pure image content) rather than /usr/libexec, which Kairos lists in
+# PERSISTENT_STATE_PATHS and could shadow on the installed system.
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} --libexecdir=lib \
+      -Dhttp_backend=curl -Dgir=disabled -Dgtkdoc=disabled -Ddocbook_docs=disabled \
+      -Dman=disabled -Dseccomp=enabled -Dselinux_module=disabled -Dmalcontent=disabled \
+      -Ddconf=disabled -Dsystem_helper=disabled -Dtests=false -Dinstalled_tests=false \
+      -Dwayland_security_context=disabled -Dxauth=disabled \
+      -Dsystem_bubblewrap=bwrap -Dsystem_dbus_proxy=xdg-dbus-proxy -Dsystem_fusermount=fusermount3
+RUN DESTDIR=/flatpak ninja -C buildDir install
+
 
 # ===========================================================================
 # M5: desktop polish — wallpaper, notifications, launcher, clipboard, etc.
@@ -1529,6 +1775,28 @@ COPY --from=toolchain /usr/lib/libreadline.so* /usr/lib/
 # libxml2 — pulled by libxkbregistry (waybar links it; sway uses libxkbcommon
 # and never loads it, which is why this only surfaces with waybar present).
 COPY --from=toolchain /usr/lib/libxml2.so* /usr/lib/
+# Podman (static bundle): binaries -> /usr/bin, helpers -> /usr/lib/podman,
+# default container config -> /etc/containers.
+COPY --from=podman /podman /
+# Flatpak + its from-source stack (libcurl/seccomp/zstd/lzma/cap/mount/crypto
+# already ship in the base image; glib2/gdk-pixbuf/libxml2 are pulled in above
+# by the waybar stack).
+COPY --from=libgpg-error /libgpg-error /
+COPY --from=libassuan /libassuan /
+COPY --from=gpgme /gpgme /
+COPY --from=libyaml /libyaml /
+COPY --from=libxmlb /libxmlb /
+COPY --from=appstream /appstream /
+COPY --from=libarchive /libarchive /
+COPY --from=json-glib /json-glib /
+COPY --from=libfuse3 /libfuse3 /
+# Only libe2p (ostree's libe2p dep) — NOT the rest of e2fsprogs, which would
+# clobber the base image's libext2fs and break the installer's own mkfs.ext4.
+COPY --from=e2fsprogs /e2fsprogs/usr/lib/libe2p.so* /usr/lib/
+COPY --from=bubblewrap /bubblewrap /
+COPY --from=xdg-dbus-proxy /xdg-dbus-proxy /
+COPY --from=ostree /ostree /
+COPY --from=flatpak /flatpak /
 # M6: optional real-hardware firmware (empty unless FIRMWARE=true)
 COPY --from=firmware /firmware /
 # Static config / launch layer
@@ -1580,4 +1848,16 @@ RUN ldconfig 2>/dev/null || true; \
     # like ly it must be pulled into multi-user.target directly or bluetoothd
     # never starts and bluetoothctl hangs on "waiting for bluetoothd".
     systemctl enable bluetooth.service 2>/dev/null || true; \
-    ln -sf /usr/lib/systemd/system/bluetooth.service /etc/systemd/system/multi-user.target.wants/bluetooth.service
+    ln -sf /usr/lib/systemd/system/bluetooth.service /etc/systemd/system/multi-user.target.wants/bluetooth.service; \
+    # Podman rootless: the newuid/newgid + fuse mount helpers must be setuid-root
+    # for unprivileged user-namespace and fuse-overlayfs setup.
+    for h in /usr/bin/newuidmap /usr/sbin/newuidmap /usr/bin/newgidmap /usr/sbin/newgidmap /usr/bin/fusermount3 /usr/bin/fusermount; do \
+        [ -e "$h" ] && chmod u+s "$h" || true; \
+    done; \
+    touch /etc/subuid /etc/subgid; chmod 644 /etc/subuid /etc/subgid; \
+    # Per-user rootless setup (subuid/subgid + Flathub remote) runs late on the
+    # booted system via a systemd oneshot. Like ly/bluetooth it must be pulled
+    # into multi-user.target directly (Kairos forces that target).
+    chmod +x /usr/bin/hadron-rootless-setup; \
+    systemctl enable hadron-rootless-setup.service 2>/dev/null || true; \
+    ln -sf /usr/lib/systemd/system/hadron-rootless-setup.service /etc/systemd/system/multi-user.target.wants/hadron-rootless-setup.service

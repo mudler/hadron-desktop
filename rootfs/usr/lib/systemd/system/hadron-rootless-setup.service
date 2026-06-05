@@ -1,0 +1,14 @@
+[Unit]
+Description=Hadron rootless podman + flatpak per-user setup
+# Run late: after users are created and /home is mounted. The Kairos `boot`
+# cloud-config stage runs too early — /etc and /home writes there don't stick.
+After=systemd-user-sessions.service
+ConditionPathExists=/etc/passwd
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/hadron-rootless-setup
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
