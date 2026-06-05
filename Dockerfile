@@ -1813,21 +1813,21 @@ FROM toolchain AS ly
 COPY --from=libxcb /libxcb /
 COPY --from=libxau /libxau /
 COPY --from=xorgproto /xorgproto /
-ARG ZIG_VERSION=0.14.0
-ARG LY_VERSION=1.1.0
+ARG ZIG_VERSION=0.15.1
+# ly 1.3.x is the first with the dur_file animation (durdraw .dur playback) used
+# for the login background; it needs Zig 0.15.x (new zig tarball naming).
+ARG LY_VERSION=1.3.2
 RUN mkdir -p /ly
 WORKDIR /build
-RUN curl -L https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz -o zig.tar.xz && tar -xf zig.tar.xz && rm zig.tar.xz && mv zig-linux-x86_64-* /opt/zig
+RUN curl -L https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz -o zig.tar.xz && tar -xf zig.tar.xz && rm zig.tar.xz && mv zig-x86_64-linux-* /opt/zig
 ENV PATH=/opt/zig:$PATH
 RUN curl -L https://github.com/fairyglade/ly/archive/refs/tags/v${LY_VERSION}.tar.gz -o ly.tar.gz && tar -xzf ly.tar.gz && rm ly.tar.gz && mv ly-* ly-src
 WORKDIR /build/ly-src
-# Zig's translate_c can't translate termbox2's read_terminfo_path() because it
-# uses musl's `struct stat` (st_atim/st_atime macro aliasing), so it drops the
-# body and leaves the symbol undefined at link. Rewrite the size check with
-# fseek/ftell, which translate_c handles.
-RUN perl -0pi -e 's/struct stat st;\s*\n\s*if \(fstat\(fileno\(fp\), &st\) != 0\) \{\s*\n\s*fclose\(fp\);\s*\n\s*return TB_ERR;\s*\n\s*\}\s*\n\s*\n\s*size_t fsize = st\.st_size;/fseek(fp, 0, SEEK_END);\n    long fszl_ = ftell(fp);\n    fseek(fp, 0, SEEK_SET);\n    if (fszl_ < 0) { fclose(fp); return TB_ERR; }\n    size_t fsize = (size_t)fszl_;/s' include/termbox2.h
 RUN zig build
 RUN zig build installexe -Dinit_system=systemd -Ddest_directory=/ly
+# The "Black Hole" durdraw animation shown in ly's own README (256-colour .dur),
+# used as the login background via `animation = dur_file`.
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors "https://codeberg.org/attachments/f336d6ac-8331-4323-91fc-0e4619803401" -o /ly/etc/ly/blackhole-smooth.dur
 
 
 # ===========================================================================
@@ -1992,16 +1992,19 @@ RUN ldconfig 2>/dev/null || true; \
     # bounce straight back to the login screen. sway-install stays in
     # /usr/local/bin since it only runs at install time (live, /usr/local intact).
     chmod +x /usr/bin/start-sway /usr/bin/sway-wifi-menu /usr/bin/sway-audio-menu /usr/local/bin/sway-install; \
-    # ly: run the login manager on tty1 (instead of a getty); it authenticates
-    # the cloud-config user and launches the Sway session via the session entry.
-    sed -i 's/tty2/tty1/g; s/^tty = .*/tty = 1/' /etc/ly/config.ini /usr/lib/systemd/system/ly.service 2>/dev/null || true; \
-    # Tokyo Night theme for ly: dark bg, blue box/border, matrix animation, clock.
+    # ly runs on tty1 via the ly@tty1 instance of the ly@.service template (ly
+    # 1.3.x dropped the plain ly.service and the config `tty` option — the tty is
+    # the systemd instance). It authenticates the cloud-config user and launches
+    # the Sway session via the session entry.
+    # Tokyo Night theme for ly + the "Black Hole" .dur animation from ly's README
+    # as the login background (full_color must stay on for the 256-colour file).
     sed -i \
-      -e 's/^animation = .*/animation = matrix/' \
+      -e 's/^animation = .*/animation = dur_file/' \
+      -e 's|^dur_file_path = .*|dur_file_path = /etc/ly/blackhole-smooth.dur|' \
+      -e 's/^full_color = .*/full_color = true/' \
       -e 's/^bg = .*/bg = 0x001a1b26/' \
       -e 's/^fg = .*/fg = 0x00c0caf5/' \
       -e 's/^border_fg = .*/border_fg = 0x007aa2f7/' \
-      -e 's/^cmatrix_fg = .*/cmatrix_fg = 0x007aa2f7/' \
       -e 's/^box_title = .*/box_title = Hadron Desktop/' \
       -e 's/^clock = .*/clock = %H:%M/' \
       /etc/ly/config.ini 2>/dev/null || true; \
@@ -2011,9 +2014,9 @@ RUN ldconfig 2>/dev/null || true; \
     # (which Wants=display-manager.service) is never reached. Net result: ly never
     # starts and boot stops at a login-less multi-user state. Wire ly straight
     # into multi-user.target — it's a VT TUI with no graphical prerequisites.
-    systemctl enable ly.service 2>/dev/null || true; \
+    systemctl enable ly@tty1.service 2>/dev/null || true; \
     mkdir -p /etc/systemd/system/multi-user.target.wants; \
-    ln -sf /usr/lib/systemd/system/ly.service /etc/systemd/system/multi-user.target.wants/ly.service; \
+    ln -sf /usr/lib/systemd/system/ly@.service /etc/systemd/system/multi-user.target.wants/ly@tty1.service; \
     systemctl mask getty@tty1.service 2>/dev/null || true; \
     # M2: NetworkManager is the network manager (systemd-networkd disabled at
     # runtime in favour of NM).
@@ -2061,3 +2064,11 @@ RUN --mount=type=bind,from=kairos-init,src=/kairos-init,dst=/kairos-init \
     fips_flag=""; [ "$FIPS" = "fips" ] && fips_flag="--fips"; \
     /kairos-init -l debug -s install -m "${MODEL}" -t "${TRUSTED_BOOT}" --version "${VERSION}" $fips_flag && \
     /kairos-init -l debug -s init    -m "${MODEL}" -t "${TRUSTED_BOOT}" --version "${VERSION}" $fips_flag
+# Brand the GRUB boot-menu entry. kairos-agent reads GRUB_ENTRY_NAME from
+# /etc/kairos-release (which kairos-init just generated) when install.grub-entry-
+# name is unset, preferring it over /etc/os-release. The OS identity fields in
+# /etc/os-release are intentionally left untouched.
+RUN echo 'GRUB_ENTRY_NAME="hadron-desktop"' >> /etc/kairos-release
+# kairos-init regenerates /etc/motd (and may touch /etc/issue); re-apply the
+# branded console banners on top.
+COPY rootfs/etc/issue rootfs/etc/motd /etc/

@@ -17,6 +17,6 @@ stages:
       name: "enable + start ly on the installed desktop"
       commands:
         - mkdir -p /etc/systemd/system/multi-user.target.wants
-        - ln -sf /usr/lib/systemd/system/ly.service /etc/systemd/system/multi-user.target.wants/ly.service
+        - ln -sf /usr/lib/systemd/system/ly@.service /etc/systemd/system/multi-user.target.wants/ly@tty1.service
         - systemctl daemon-reload
-        - systemctl start ly.service || true
+        - systemctl start ly@tty1.service || true
