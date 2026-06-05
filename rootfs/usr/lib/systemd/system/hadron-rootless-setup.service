@@ -1,8 +1,11 @@
 [Unit]
 Description=Hadron rootless podman + flatpak per-user setup
-# Run late: after users are created and /home is mounted. The Kairos `boot`
-# cloud-config stage runs too early — /etc and /home writes there don't stick.
-After=systemd-user-sessions.service
+# Run after Kairos has applied the cloud-config: /etc/passwd is not persisted, so
+# the desktop user is recreated every boot by the cos-setup boot stage. Ordering
+# only after systemd-user-sessions is too early — the user doesn't exist yet, so
+# subuid/subgid and the Flathub remote never get set. Wait for cos-setup-boot
+# (and -network) to finish first.
+After=cos-setup-network.service cos-setup-boot.service systemd-user-sessions.service
 ConditionPathExists=/etc/passwd
 
 [Service]
