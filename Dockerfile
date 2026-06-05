@@ -14,6 +14,9 @@ ARG BASE_IMAGE=ghcr.io/kairos-io/hadron:main
 # GPU=vm (default): software/virtual GL only — no LLVM is built.
 # GPU=full: hardware GL (iris/radeonsi) — builds the LLVM/SPIRV stack below.
 ARG GPU=vm
+# kairos-init tool version for the bootable layer (final `kairos` stage). Global
+# ARG so it is usable in that stage's FROM.
+ARG KAIROS_INIT=v0.14.0
 
 FROM ghcr.io/kairos-io/hadron-toolchain:main AS toolchain
 
@@ -2035,3 +2038,26 @@ RUN ldconfig 2>/dev/null || true; \
     chmod +x /usr/bin/hadron-rootless-setup; \
     systemctl enable hadron-rootless-setup.service 2>/dev/null || true; \
     ln -sf /usr/lib/systemd/system/hadron-rootless-setup.service /etc/systemd/system/multi-user.target.wants/hadron-rootless-setup.service
+
+
+# ===========================================================================
+# Kairos init layer — makes the image bootable/installable.
+#
+# Folds in what used to be a separately-fetched Kairos Dockerfile
+# (kairos-io/kairos images/Dockerfile): bind-mount the kairos-init tool and run
+# its `install` then `init` stages on top of the desktop image. This is the
+# default build target, so a single `docker build .` produces an image
+# AuroraBoot can turn straight into an ISO. Build `--target default` for the
+# bare desktop image without this layer.
+# ===========================================================================
+FROM quay.io/kairos/kairos-init:${KAIROS_INIT} AS kairos-init
+
+FROM default AS kairos
+ARG MODEL=generic
+ARG TRUSTED_BOOT=false
+ARG VERSION=v0.0.0
+ARG FIPS=no-fips
+RUN --mount=type=bind,from=kairos-init,src=/kairos-init,dst=/kairos-init \
+    fips_flag=""; [ "$FIPS" = "fips" ] && fips_flag="--fips"; \
+    /kairos-init -l debug -s install -m "${MODEL}" -t "${TRUSTED_BOOT}" --version "${VERSION}" $fips_flag && \
+    /kairos-init -l debug -s init    -m "${MODEL}" -t "${TRUSTED_BOOT}" --version "${VERSION}" $fips_flag

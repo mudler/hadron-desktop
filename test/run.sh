@@ -24,10 +24,10 @@ cd "$REPO_ROOT"
 MILESTONE="${MILESTONE:-M0}"
 BASE_IMAGE="${BASE_IMAGE:-ghcr.io/kairos-io/hadron:main}"
 AURORA_IMAGE="${AURORA_IMAGE:-quay.io/kairos/auroraboot:v0.21.0-alpha.4}"
-KAIROS_DOCKERFILE_URL="https://raw.githubusercontent.com/kairos-io/kairos/master/images/Dockerfile"
 
+# The production image already folds in the Kairos init layer (final Dockerfile
+# stage), so it is bootable on its own — no separate wrap step.
 PROD_IMAGE="sway-desktop:dev"
-INIT_IMAGE="sway-desktop-init:dev"
 TEST_IMAGE="sway-desktop-test:dev"
 
 WORK="$REPO_ROOT/build/sway-desktop"
@@ -48,22 +48,12 @@ err() { echo -e "\033[1;31m[harness] $*\033[0m" >&2; }
 # 1. Build the example (production) image
 # ---------------------------------------------------------------------------
 if [ "${SKIP_BUILD:-0}" != "1" ]; then
-  log "Building example image ($PROD_IMAGE)"
+  log "Building example image ($PROD_IMAGE, Kairos init layer folded in)"
   docker build --build-arg BASE_IMAGE="$BASE_IMAGE" -t "$PROD_IMAGE" "$EXAMPLE_DIR" || { err "example build failed"; exit 1; }
-
-  log "Wrapping with Kairos init layer ($INIT_IMAGE)"
-  curl -sSL "$KAIROS_DOCKERFILE_URL" -o "$WORK/Dockerfile.kairos" || { err "fetch kairos Dockerfile failed"; exit 1; }
-  docker build -t "$INIT_IMAGE" -f "$WORK/Dockerfile.kairos" \
-    --build-arg BASE_IMAGE="$PROD_IMAGE" \
-    --build-arg VERSION="v0.0.0" \
-    --build-arg TRUSTED_BOOT="false" \
-    --build-arg MODEL="generic" \
-    --build-arg FIPS="no-fips" \
-    "$WORK" || { err "kairos layer build failed"; exit 1; }
 
   log "Injecting test instrumentation ($TEST_IMAGE, milestone=$MILESTONE)"
   docker build -t "$TEST_IMAGE" -f "$EXAMPLE_DIR/test/Dockerfile.test" \
-    --build-arg BASE_IMAGE="$INIT_IMAGE" \
+    --build-arg BASE_IMAGE="$PROD_IMAGE" \
     --build-arg MILESTONE="$MILESTONE" \
     "$EXAMPLE_DIR" || { err "test overlay build failed"; exit 1; }
 fi
