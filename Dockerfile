@@ -1790,7 +1790,9 @@ COPY --from=appstream /appstream /
 COPY --from=libarchive /libarchive /
 COPY --from=json-glib /json-glib /
 COPY --from=libfuse3 /libfuse3 /
-COPY --from=e2fsprogs /e2fsprogs /
+# Only libe2p (ostree's libe2p dep) — NOT the rest of e2fsprogs, which would
+# clobber the base image's libext2fs and break the installer's own mkfs.ext4.
+COPY --from=e2fsprogs /e2fsprogs/usr/lib/libe2p.so* /usr/lib/
 COPY --from=bubblewrap /bubblewrap /
 COPY --from=xdg-dbus-proxy /xdg-dbus-proxy /
 COPY --from=ostree /ostree /
@@ -1848,9 +1850,14 @@ RUN ldconfig 2>/dev/null || true; \
     systemctl enable bluetooth.service 2>/dev/null || true; \
     ln -sf /usr/lib/systemd/system/bluetooth.service /etc/systemd/system/multi-user.target.wants/bluetooth.service; \
     # Podman rootless: the newuid/newgid + fuse mount helpers must be setuid-root
-    # for unprivileged user-namespace and fuse-overlayfs setup. subuid/subgid for
-    # the (install-time) desktop user are populated each boot by 92_podman.yaml.
+    # for unprivileged user-namespace and fuse-overlayfs setup.
     for h in /usr/bin/newuidmap /usr/sbin/newuidmap /usr/bin/newgidmap /usr/sbin/newgidmap /usr/bin/fusermount3 /usr/bin/fusermount; do \
         [ -e "$h" ] && chmod u+s "$h" || true; \
     done; \
-    touch /etc/subuid /etc/subgid; chmod 644 /etc/subuid /etc/subgid
+    touch /etc/subuid /etc/subgid; chmod 644 /etc/subuid /etc/subgid; \
+    # Per-user rootless setup (subuid/subgid + Flathub remote) runs late on the
+    # booted system via a systemd oneshot. Like ly/bluetooth it must be pulled
+    # into multi-user.target directly (Kairos forces that target).
+    chmod +x /usr/bin/hadron-rootless-setup; \
+    systemctl enable hadron-rootless-setup.service 2>/dev/null || true; \
+    ln -sf /usr/lib/systemd/system/hadron-rootless-setup.service /etc/systemd/system/multi-user.target.wants/hadron-rootless-setup.service
