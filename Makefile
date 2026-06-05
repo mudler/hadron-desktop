@@ -1,0 +1,57 @@
+# Build the Hadron sway-desktop image and a bootable installer ISO.
+#
+#   make image        # build the desktop image (Kairos init layer folded in)
+#   make iso          # build the image + the installer ISO
+#   make              # both (image, then iso)
+#   make clean        # remove build artifacts
+#
+# Knobs (override on the command line):
+#   make GPU=full FIRMWARE=true          # hardware GL + real-hardware firmware
+#   make IMAGE=sway-desktop:hw            # change the image tag
+#   make BASE_IMAGE=ghcr.io/...:vX        # pin a different Hadron base
+#   make VERSION=v1.2.3                   # stamp a Kairos version
+
+IMAGE        ?= sway-desktop:dev
+BASE_IMAGE   ?= ghcr.io/kairos-io/hadron:main
+AURORA_IMAGE ?= quay.io/kairos/auroraboot:v0.21.0-alpha.4
+
+WORK    := build/sway-desktop
+ISO_DIR := $(WORK)/iso
+
+# Optional build args, only passed when set (otherwise the Dockerfile defaults
+# apply: GPU=vm, FIRMWARE=false, VERSION=v0.0.0).
+BUILD_ARGS := --build-arg BASE_IMAGE=$(BASE_IMAGE)
+ifdef GPU
+BUILD_ARGS += --build-arg GPU=$(GPU)
+endif
+ifdef FIRMWARE
+BUILD_ARGS += --build-arg FIRMWARE=$(FIRMWARE)
+endif
+ifdef VERSION
+BUILD_ARGS += --build-arg VERSION=$(VERSION)
+endif
+
+export DOCKER_BUILDKIT := 1
+
+.PHONY: all image iso clean
+
+all: iso
+
+# The desktop image, with the Kairos init layer folded in as the final stage
+# (build `--target default` for the bare desktop image without it).
+image:
+	docker build $(BUILD_ARGS) -t $(IMAGE) .
+
+# Build the installer ISO with AuroraBoot straight from the image (it reads the
+# local image over the Docker socket).
+iso: image
+	mkdir -p $(ISO_DIR)
+	rm -f $(ISO_DIR)/*.iso
+	docker run --rm --privileged \
+	  -v /var/run/docker.sock:/var/run/docker.sock \
+	  -v $(CURDIR)/$(ISO_DIR):/output \
+	  $(AURORA_IMAGE) build-iso --output /output/ docker:$(IMAGE)
+	@echo "ISO: $$(ls -t $(ISO_DIR)/*.iso | head -1)"
+
+clean:
+	rm -rf $(WORK)

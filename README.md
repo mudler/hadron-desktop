@@ -30,23 +30,26 @@ harness) and depends only on the published Hadron images
 ## Build
 
 ```sh
-# Build the desktop image (extends ghcr.io/kairos-io/hadron:main)
-docker build -t sway-desktop:dev .
+make            # build the image + the installer ISO
+make image      # just the image (extends ghcr.io/kairos-io/hadron:main)
+make iso        # just the ISO (AuroraBoot)
 ```
 
-To produce a bootable artifact, wrap it with the Kairos init layer and run it
-through AuroraBoot — the test harness below does exactly this.
+The Kairos init layer is folded into the Dockerfile's final stage, so a plain
+`docker build -t sway-desktop:dev .` already produces a bootable artifact
+AuroraBoot can turn into an ISO (build `--target default` for the bare desktop
+image without it).
 
 ## Run on real hardware
 
-The image is a Kairos/Hadron OS image. Wrap it with the Kairos init layer, build
-an ISO/disk with AuroraBoot, and install it to a machine. On boot it autologins
-the `sway` user on `tty1` and starts Sway. (Real wifi/bluetooth/audio require the
+The image is a bootable Kairos/Hadron OS image. Build an ISO/disk with AuroraBoot
+(`make iso`) and install it to a machine. On boot it autologins the `sway` user
+on `tty1` and starts Sway. (Real wifi/bluetooth/audio require the
 `linux-firmware` blobs — see milestone M6.)
 
 ## Test (headless, autonomous)
 
-The `test/` harness builds the image, wraps it with Kairos, builds a bootable ISO
+The `test/` harness builds the image, builds a bootable ISO
 with AuroraBoot, boots it headless in QEMU, and asserts that the desktop and each
 subsystem come up — entirely without a display. It exercises even wifi and
 bluetooth using virtual kernel devices (`mac80211_hwsim`, `hci_vhci`).
