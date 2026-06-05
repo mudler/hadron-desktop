@@ -1596,6 +1596,47 @@ RUN DESTDIR=/toolbox ninja -C buildDir install
 # Drop the bundled bats test suite (installed by default) from the image.
 RUN rm -rf /toolbox/usr/share/toolbox/test
 
+# --- shared-mime-info — the XDG MIME database -------------------------------
+# Without /usr/share/mime, GLib's g_content_type_guess() can't identify files,
+# so libxmlb (and thus appstream / `flatpak search`) fails to recognise the
+# gzipped Flathub catalog and never decompresses it. Build the database and the
+# update-mime-database tool; compile the binary cache at build time.
+FROM toolchain AS shared-mime-info
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+ARG SMI_VERSION=2.4
+RUN mkdir -p /shared-mime-info
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://gitlab.freedesktop.org/xdg/shared-mime-info/-/archive/${SMI_VERSION}/shared-mime-info-${SMI_VERSION}.tar.gz -o smi.tar.gz && tar -xf smi.tar.gz && rm smi.tar.gz && mv shared-mime-info-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+# No gettext/itstool/xmlto. Stub them: msgfmt must report a GNU version (meson's
+# i18n.merge_file checks) and, in --xml mode, pass the template through so the
+# (untranslated) freedesktop.org.xml is still produced.
+RUN for t in xgettext msgmerge itstool xmlto; do printf '#!/bin/sh\nexit 0\n' > /usr/bin/$t && chmod +x /usr/bin/$t; done
+RUN cat > /usr/bin/msgfmt <<'MFEOF' && chmod +x /usr/bin/msgfmt
+#!/bin/sh
+template=""; out=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --version) echo "msgfmt (GNU gettext-tools) 0.21"; exit 0 ;;
+        --template) shift; template="$1" ;;
+        --template=*) template="${1#*=}" ;;
+        -o) shift; out="$1" ;;
+        --output-file=*) out="${1#*=}" ;;
+    esac
+    shift
+done
+[ -n "$out" ] && { [ -n "$template" ] && cp "$template" "$out" || python3 -c "import struct,sys;open(sys.argv[1],'wb').write(struct.pack('<7I',0x950412de,0,0,28,28,0,28))" "$out"; }
+exit 0
+MFEOF
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dbuild-tools=true -Dupdate-mimedb=false -Dbuild-translations=false -Dbuild-tests=false
+RUN DESTDIR=/shared-mime-info ninja -C buildDir install
+# Compile the binary mime cache into the DESTDIR (the in-tree update-mimedb
+# post-install step is skipped above because it isn't DESTDIR-aware).
+RUN /shared-mime-info/usr/bin/update-mime-database /shared-mime-info/usr/share/mime 2>&1 | tail -1; \
+    ls -la /shared-mime-info/usr/share/mime/mime.cache
+
 
 # ===========================================================================
 # M5: desktop polish — wallpaper, notifications, launcher, clipboard, etc.
@@ -1927,6 +1968,9 @@ COPY --from=flatpak /flatpak /
 # both static Go binaries. capsh/setsid come from the base, flatpak-spawn above.
 COPY --from=skopeo /skopeo /
 COPY --from=toolbox /toolbox /
+# XDG MIME database — required for GLib content-type detection, which appstream/
+# libxmlb rely on to decompress the gzipped Flathub catalog (fixes flatpak search).
+COPY --from=shared-mime-info /shared-mime-info /
 # M6: optional real-hardware firmware (empty unless FIRMWARE=true)
 COPY --from=firmware /firmware /
 # Static config / launch layer
