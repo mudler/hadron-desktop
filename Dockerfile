@@ -1813,10 +1813,12 @@ FROM toolchain AS ly
 COPY --from=libxcb /libxcb /
 COPY --from=libxau /libxau /
 COPY --from=xorgproto /xorgproto /
-ARG ZIG_VERSION=0.15.1
-# ly 1.3.x is the first with the dur_file animation (durdraw .dur playback) used
-# for the login background; it needs Zig 0.15.x (new zig tarball naming).
-ARG LY_VERSION=1.3.2
+ARG ZIG_VERSION=0.16.0
+# ly 1.4.x has the dur_file animation (durdraw .dur playback) used for the login
+# background AND dur_offset_alignment for centering a movie wider than the
+# console (1.3.x's offset is unsigned, so it can't shift left to centre). Needs
+# Zig 0.16.x.
+ARG LY_VERSION=1.4.1
 RUN mkdir -p /ly
 WORKDIR /build
 RUN curl -L https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz -o zig.tar.xz && tar -xf zig.tar.xz && rm zig.tar.xz && mv zig-x86_64-linux-* /opt/zig
@@ -2001,6 +2003,7 @@ RUN ldconfig 2>/dev/null || true; \
     sed -i \
       -e 's/^animation = .*/animation = dur_file/' \
       -e 's|^dur_file_path = .*|dur_file_path = /etc/ly/blackhole-smooth.dur|' \
+      -e 's/^dur_offset_alignment = .*/dur_offset_alignment = center/' \
       -e 's/^full_color = .*/full_color = true/' \
       -e 's/^bg = .*/bg = 0x001a1b26/' \
       -e 's/^fg = .*/fg = 0x00c0caf5/' \
@@ -2069,6 +2072,12 @@ RUN --mount=type=bind,from=kairos-init,src=/kairos-init,dst=/kairos-init \
 # name is unset, preferring it over /etc/os-release. The OS identity fields in
 # /etc/os-release are intentionally left untouched.
 RUN echo 'GRUB_ENTRY_NAME="hadron-desktop"' >> /etc/kairos-release
+# Tokyo Night GRUB menu colours. The menu renders from COS_STATE before the
+# rootfs, so we can't ship a gfxterm background image/font there; instead inject
+# text-mode colours (GRUB's 16-colour set, so cyan/blue accents on the dark
+# default) into /etc/cos/grub.cfg, which the installer copies to the boot
+# partition's grub.cfg. Inserted after `loadfont unicode`, before the menu.
+RUN sed -i '/^loadfont unicode/a set color_normal=light-gray/black\nset color_highlight=black/cyan\nset menu_color_normal=cyan/black\nset menu_color_highlight=black/cyan' /etc/cos/grub.cfg
 # kairos-init regenerates /etc/motd (and may touch /etc/issue); re-apply the
 # branded console banners on top.
 COPY rootfs/etc/issue rootfs/etc/motd /etc/
