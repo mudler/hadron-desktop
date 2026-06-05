@@ -1470,6 +1470,173 @@ RUN meson setup buildDir ${COMMON_MESON_FLAGS} --libexecdir=lib \
       -Dsystem_bubblewrap=bwrap -Dsystem_dbus_proxy=xdg-dbus-proxy -Dsystem_fusermount=fusermount3
 RUN DESTDIR=/flatpak ninja -C buildDir install
 
+# --- toolbox (toolbx) — mutable dev-environment containers on podman ---------
+# Toolbox is Go and ships no prebuilt binary, and it shells out to skopeo (also
+# Go) which the base lacks. The official Go SDK is statically linked and runs on
+# musl, and CGO_ENABLED=0 yields static binaries, so we vendor the SDK to build
+# both. (capsh/setsid come from the base; flatpak-spawn from flatpak.)
+FROM toolchain AS gosdk
+ARG GO_VERSION=go1.26.4
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://go.dev/dl/${GO_VERSION}.linux-amd64.tar.gz -o go.tgz && tar -xf go.tgz -C /usr/local && rm go.tgz
+
+# skopeo — toolbox uses `skopeo inspect` during `toolbox create`. Pure-Go build
+# (openpgp instead of cgo gpgme; no btrfs/devicemapper graph drivers).
+FROM toolchain AS skopeo
+COPY --from=gosdk /usr/local/go /usr/local/go
+ENV PATH=/usr/local/go/bin:/usr/local/go/bin:/usr/bin:/bin GOTOOLCHAIN=local CGO_ENABLED=0 GOFLAGS=-mod=vendor
+ARG SKOPEO_VERSION=1.23.0
+RUN mkdir -p /skopeo/usr/bin /skopeo/etc/containers/registries.d
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/containers/skopeo/archive/refs/tags/v${SKOPEO_VERSION}.tar.gz -o s.tar.gz && tar -xf s.tar.gz && rm s.tar.gz && mv skopeo-* src
+WORKDIR /build/src
+RUN go build -tags "containers_image_openpgp exclude_graphdriver_btrfs exclude_graphdriver_devicemapper" \
+      -ldflags "-s -w" -o /skopeo/usr/bin/skopeo ./cmd/skopeo
+# policy.json already ships with podman; just add skopeo's registries.d default.
+RUN cp default.yaml /skopeo/etc/containers/registries.d/default.yaml 2>/dev/null || true
+
+# toolbox itself (meson + go). Man pages need go-md2man we don't have, so drop
+# the doc/ subdir; everything else installs to bindir/profile.d/tmpfiles.d.
+FROM toolchain AS toolbox
+COPY --from=gosdk /usr/local/go /usr/local/go
+ENV PATH=/usr/local/go/bin:/usr/bin:/bin GOTOOLCHAIN=local CGO_ENABLED=0
+ARG TOOLBOX_VERSION=0.3
+RUN mkdir -p /toolbox
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/containers/toolbox/releases/download/${TOOLBOX_VERSION}/toolbox-${TOOLBOX_VERSION}-vendored.tar.xz -o t.tar.xz && tar -xf t.tar.xz && rm t.tar.xz && mv toolbox-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+# Man pages need go-md2man (a Go tool we don't ship). Drop the doc/ subdir and
+# stub the binary so meson's top-level find_program() resolves.
+RUN : > doc/meson.build && printf '#!/bin/sh\nexit 0\n' > /usr/bin/go-md2man && chmod +x /usr/bin/go-md2man
+# go-nvml (NVIDIA GPU detection) is cgo-only and blocks a static build. Replace
+# the one file that uses it with a stub that reports "unsupported" — callers
+# already treat ErrPlatformUnsupported as "no GPU, carry on".
+RUN cat > src/pkg/nvidia/nvidia.go <<'NVEOF'
+package nvidia
+
+import (
+	"errors"
+
+	"github.com/sirupsen/logrus"
+	"tags.cncf.io/container-device-interface/specs-go"
+)
+
+var (
+	ErrNVMLDriverLibraryVersionMismatch = errors.New("NVML driver/library version mismatch")
+	ErrPlatformUnsupported              = errors.New("platform is unsupported")
+)
+
+// GenerateCDISpec is stubbed: NVIDIA support (go-nvml) is cgo-only and would
+// prevent the static musl build. Callers treat ErrPlatformUnsupported as "no
+// GPU available" and continue.
+func GenerateCDISpec() (*specs.Spec, error) {
+	return nil, ErrPlatformUnsupported
+}
+
+func SetLogLevel(level logrus.Level) {}
+NVEOF
+# utils_cgo.go uses cgo (dlopen libsubid) to read subid ranges. Replace it with
+# a pure-Go reader of /etc/subuid + /etc/subgid (which hadron-rootless-setup
+# populates) so the binary stays cgo-free and static.
+RUN cat > src/pkg/utils/utils_cgo.go <<'SUBEOF'
+package utils
+
+import (
+	"bufio"
+	"errors"
+	"os"
+	"os/user"
+	"strings"
+)
+
+func subidHasRange(path, username, uid string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		fields := strings.Split(scanner.Text(), ":")
+		if len(fields) >= 3 && (fields[0] == username || fields[0] == uid) {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateSubIDRanges checks /etc/subuid and /etc/subgid directly (pure Go,
+// replacing the cgo libsubid path) so toolbox can build static on musl.
+func ValidateSubIDRanges(user *user.User) (bool, error) {
+	if IsInsideContainer() {
+		panic("cannot validate subordinate IDs inside container")
+	}
+	if user == nil {
+		panic("cannot validate subordinate IDs when user is nil")
+	}
+	if user.Username == "ALL" {
+		return false, errors.New("username ALL not supported")
+	}
+	if !subidHasRange("/etc/subuid", user.Username, user.Uid) {
+		return false, errors.New("no subuid ranges found for user")
+	}
+	if !subidHasRange("/etc/subgid", user.Username, user.Uid) {
+		return false, errors.New("no subgid ranges found for user")
+	}
+	return true, nil
+}
+SUBEOF
+# Build pure-static (CGO_ENABLED=0): no interpreter, so the one binary runs
+# identically on the musl host and inside any (glibc) toolbox container —
+# replacing toolbox's go-build-wrapper, which does cgo/external linking against
+# a glibc dynamic linker under /run/host.
+RUN printf '#!/bin/sh\ncd "$1" || exit 1\ntags=""\n"$7" 2>/dev/null && tags="-tags migration_path_for_coreos_toolbox"\nexec go build $tags -trimpath -ldflags "-s -w -X github.com/containers/toolbox/pkg/version.currentVersion=$4" -o "$2/$3"\n' > src/go-build-wrapper
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dmigration_path_for_coreos_toolbox=false
+RUN DESTDIR=/toolbox ninja -C buildDir install
+# Drop the bundled bats test suite (installed by default) from the image.
+RUN rm -rf /toolbox/usr/share/toolbox/test
+
+# --- shared-mime-info — the XDG MIME database -------------------------------
+# Without /usr/share/mime, GLib's g_content_type_guess() can't identify files,
+# so libxmlb (and thus appstream / `flatpak search`) fails to recognise the
+# gzipped Flathub catalog and never decompresses it. Build the database and the
+# update-mime-database tool; compile the binary cache at build time.
+FROM toolchain AS shared-mime-info
+COPY --from=glib2 /glib2 /
+COPY --from=pcre2 /pcre2 /
+ARG SMI_VERSION=2.4
+RUN mkdir -p /shared-mime-info
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://gitlab.freedesktop.org/xdg/shared-mime-info/-/archive/${SMI_VERSION}/shared-mime-info-${SMI_VERSION}.tar.gz -o smi.tar.gz && tar -xf smi.tar.gz && rm smi.tar.gz && mv shared-mime-info-* src
+WORKDIR /build/src
+RUN pip3 install meson ninja
+# No gettext/itstool/xmlto. Stub them: msgfmt must report a GNU version (meson's
+# i18n.merge_file checks) and, in --xml mode, pass the template through so the
+# (untranslated) freedesktop.org.xml is still produced.
+RUN for t in xgettext msgmerge itstool xmlto; do printf '#!/bin/sh\nexit 0\n' > /usr/bin/$t && chmod +x /usr/bin/$t; done
+RUN cat > /usr/bin/msgfmt <<'MFEOF' && chmod +x /usr/bin/msgfmt
+#!/bin/sh
+template=""; out=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --version) echo "msgfmt (GNU gettext-tools) 0.21"; exit 0 ;;
+        --template) shift; template="$1" ;;
+        --template=*) template="${1#*=}" ;;
+        -o) shift; out="$1" ;;
+        --output-file=*) out="${1#*=}" ;;
+    esac
+    shift
+done
+[ -n "$out" ] && { [ -n "$template" ] && cp "$template" "$out" || python3 -c "import struct,sys;open(sys.argv[1],'wb').write(struct.pack('<7I',0x950412de,0,0,28,28,0,28))" "$out"; }
+exit 0
+MFEOF
+RUN meson setup buildDir ${COMMON_MESON_FLAGS} -Dbuild-tools=true -Dupdate-mimedb=false -Dbuild-translations=false -Dbuild-tests=false
+RUN DESTDIR=/shared-mime-info ninja -C buildDir install
+# Compile the binary mime cache into the DESTDIR (the in-tree update-mimedb
+# post-install step is skipped above because it isn't DESTDIR-aware).
+RUN /shared-mime-info/usr/bin/update-mime-database /shared-mime-info/usr/share/mime 2>&1 | tail -1; \
+    ls -la /shared-mime-info/usr/share/mime/mime.cache
+
 
 # ===========================================================================
 # M5: desktop polish — wallpaper, notifications, launcher, clipboard, etc.
@@ -1797,6 +1964,13 @@ COPY --from=bubblewrap /bubblewrap /
 COPY --from=xdg-dbus-proxy /xdg-dbus-proxy /
 COPY --from=ostree /ostree /
 COPY --from=flatpak /flatpak /
+# Toolbox (mutable dev containers on podman) + skopeo (its image-inspect dep);
+# both static Go binaries. capsh/setsid come from the base, flatpak-spawn above.
+COPY --from=skopeo /skopeo /
+COPY --from=toolbox /toolbox /
+# XDG MIME database — required for GLib content-type detection, which appstream/
+# libxmlb rely on to decompress the gzipped Flathub catalog (fixes flatpak search).
+COPY --from=shared-mime-info /shared-mime-info /
 # M6: optional real-hardware firmware (empty unless FIRMWARE=true)
 COPY --from=firmware /firmware /
 # Static config / launch layer
