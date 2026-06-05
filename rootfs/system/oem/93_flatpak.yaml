@@ -1,0 +1,21 @@
+# Flatpak first-boot setup for the installed desktop.
+#
+# Apps are installed per-user into ~/.local/share/flatpak, which lives on the
+# persistent /home, so they survive reboots (the system-wide /var/lib/flatpak is
+# not persisted). We pre-add the Flathub remote per human user with
+# --no-gpg-verify, because this image ships libgpgme but no gpg binary to verify
+# signatures. remote-add records the URL only (no network needed at boot); the
+# actual metadata/app download happens on `flatpak install`.
+#
+# Guarded to skip the live/installer boot (no desktop user exists there yet).
+name: "flatpak first-boot setup"
+stages:
+  boot:
+    - if: '! grep -q "install-mode" /proc/cmdline && [ ! -f /run/cos/live_mode ]'
+      name: "add the flathub remote for desktop users"
+      commands:
+        - |
+          for u in $(awk -F: '$3>=1000 && $3<60000 {print $1}' /etc/passwd); do
+            su - "$u" -c 'flatpak --user remote-add --if-not-exists --no-gpg-verify \
+              flathub https://dl.flathub.org/repo/' 2>/dev/null || true
+          done
