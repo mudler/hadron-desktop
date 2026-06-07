@@ -35,6 +35,20 @@ make image      # just the image (extends ghcr.io/kairos-io/hadron:main)
 make iso        # just the ISO (AuroraBoot)
 ```
 
+## Try it in a VM
+
+```sh
+make vm-install   # fresh disk, boot the newest installer ISO (then it reboots to disk)
+make vm           # boot the already-installed disk
+```
+
+Both call `tools/vm.sh`, which launches QEMU with UEFI (OVMF) **and virtio-gpu**.
+Use it rather than a hand-rolled `qemu-system-x86_64` line: QEMU's *default* VGA
+gives a glitchy UEFI framebuffer that mangles the boot console into colored
+static (a QEMU artifact, not an image bug — real hardware renders fine).
+Connect over VNC (`<host>:5910`); set `NOVNC=1` for a browser client. See the
+header of `tools/vm.sh` for knobs (`MEM`, `VNC`, `FRESH=1`, `ISO=…`, …).
+
 The Kairos init layer is folded into the Dockerfile's final stage, so a plain
 `docker build -t sway-desktop:dev .` already produces a bootable artifact
 AuroraBoot can turn into an ISO (build `--target default` for the bare desktop

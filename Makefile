@@ -33,7 +33,7 @@ endif
 
 export DOCKER_BUILDKIT := 1
 
-.PHONY: all image iso clean
+.PHONY: all image iso vm vm-install clean
 
 all: iso
 
@@ -52,6 +52,14 @@ iso: image
 	  -v $(CURDIR)/$(ISO_DIR):/output \
 	  $(AURORA_IMAGE) build-iso --output /output/ docker:$(IMAGE)
 	@echo "ISO: $$(ls -t $(ISO_DIR)/*.iso | head -1)"
+
+# Run the image in QEMU with the correct flags (UEFI + virtio-gpu, NOT the
+# default VGA which renders the boot console as garbled static). See tools/vm.sh
+# for env knobs (NOVNC=1, FRESH=1, MEM, VNC, ...).
+vm-install:           ## fresh disk, boot the newest installer ISO
+	tools/vm.sh install
+vm:                   ## boot the already-installed disk
+	tools/vm.sh run
 
 clean:
 	rm -rf $(WORK)
