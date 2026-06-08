@@ -1846,6 +1846,10 @@ COPY --from=flatpak /flatpak /
 # XDG MIME database — required for GLib content-type detection, which appstream/
 # libxmlb rely on to decompress the gzipped Flathub catalog (fixes flatpak search).
 COPY --from=shared-mime-info /shared-mime-info /
+# Docker (static bundle): dockerd/docker/containerd/runc + helpers -> /usr/bin.
+COPY --from=docker /docker /
+# Distrobox (POSIX shell) — mutable dev containers on docker.
+COPY --from=distrobox /distrobox /
 # M6: optional real-hardware firmware (empty unless FIRMWARE=true)
 COPY --from=firmware /firmware /
 # Static config / launch layer
@@ -1857,7 +1861,8 @@ COPY rootfs/ /
 RUN ldconfig 2>/dev/null || true; \
     # Register the bundled Nerd Font symbols so waybar/foot resolve the glyphs.
     fc-cache -f 2>/dev/null || true; \
-    for g in audio video render input bluetooth seat; do groupadd -f "$g"; done; \
+    for g in audio video render input bluetooth seat docker; do groupadd -f "$g"; done; \
+    mkdir -p /var/lib/docker; \
     # start-sway lives in /usr/bin (NOT /usr/local): Kairos mounts /usr/local
     # from the persistent partition on the installed system, which shadows
     # anything baked into the image there — ly would exec a missing launcher and
@@ -1902,17 +1907,21 @@ RUN ldconfig 2>/dev/null || true; \
     # never starts and bluetoothctl hangs on "waiting for bluetoothd".
     systemctl enable bluetooth.service 2>/dev/null || true; \
     ln -sf /usr/lib/systemd/system/bluetooth.service /etc/systemd/system/multi-user.target.wants/bluetooth.service; \
+    # Docker: rootful daemon. enable links it for multi-user; Kairos forces that
+    # target and shadows baked enablement on /etc, so also symlink it directly
+    # (the installed system re-applies this via the 92_docker.yaml oem boot stage).
+    systemctl enable docker.socket docker.service 2>/dev/null || true; \
+    ln -sf /usr/lib/systemd/system/docker.service /etc/systemd/system/multi-user.target.wants/docker.service; \
     # Boot splash: the base image ships /usr/bin/hadron-splash (animated "HADRON"
     # ASCII, self-limits to ~5s). Pull it into multi-user.target like ly; the unit
     # is ordered Before=ly@tty1.service so it renders on tty1 before the login.
     systemctl enable hadron-splash.service 2>/dev/null || true; \
     ln -sf /usr/lib/systemd/system/hadron-splash.service /etc/systemd/system/multi-user.target.wants/hadron-splash.service; \
-    # Podman rootless: the newuid/newgid + fuse mount helpers must be setuid-root
-    # for unprivileged user-namespace and fuse-overlayfs setup.
-    for h in /usr/bin/newuidmap /usr/sbin/newuidmap /usr/bin/newgidmap /usr/sbin/newgidmap /usr/bin/fusermount3 /usr/bin/fusermount; do \
+    # Flatpak's fusermount helpers must be setuid-root (revokefs-fuse + the
+    # document portal). Docker is rootful, so no newuidmap/newgidmap setuid here.
+    for h in /usr/bin/fusermount3 /usr/bin/fusermount; do \
         [ -e "$h" ] && chmod u+s "$h" || true; \
     done; \
-    touch /etc/subuid /etc/subgid; chmod 644 /etc/subuid /etc/subgid; \
     # Per-user rootless setup (subuid/subgid + Flathub remote) runs late on the
     # booted system via a systemd oneshot. Like ly/bluetooth it must be pulled
     # into multi-user.target directly (Kairos forces that target).
