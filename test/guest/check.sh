@@ -116,7 +116,13 @@ if want M7; then
   # distrobox-init inside, which needs container egress (apk). Generous timeout.
   if su "$DESKUSER" -c "command -v distrobox >/dev/null 2>&1"; then pass distrobox_present; else fail distrobox_present; fi
   su "$DESKUSER" -c "distrobox rm -f dbtest >/dev/null 2>&1" || true
-  if su "$DESKUSER" -c "timeout 150 distrobox create --yes --image alpine:latest --name dbtest" >/tmp/dbcreate.log 2>&1; then
+  su "$DESKUSER" -c "timeout 150 distrobox create --yes --image alpine:latest --name dbtest" >/tmp/dbcreate.log 2>&1 || true
+  # Assert the box was created rather than trusting the create exit code: in the
+  # headless QEMU/vfs test env, distrobox create's container-warmup step can emit
+  # a benign "openat dev/ptmx: no such device" and exit non-zero even though the
+  # container exists and is usable (the authoritative end-to-end proof is the
+  # distrobox_enter check below, which boots the box and reads its os-release).
+  if su "$DESKUSER" -c "docker ps -a --format '{{.Names}}'" 2>/dev/null | grep -qx dbtest; then
     pass distrobox_create
   else
     fail distrobox_create
