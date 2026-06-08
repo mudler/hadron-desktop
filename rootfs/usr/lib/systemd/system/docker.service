@@ -1,0 +1,26 @@
+[Unit]
+Description=Docker Application Container Engine
+Documentation=https://docs.docker.com
+After=network-online.target docker.socket
+Wants=network-online.target
+Requires=docker.socket
+
+[Service]
+Type=notify
+# No --containerd flag: dockerd starts and supervises its own containerd child,
+# so a single service is enough (the static bundle ships no containerd.service).
+ExecStart=/usr/bin/dockerd -H fd://
+ExecReload=/bin/kill -s HUP $MAINPID
+TimeoutStartSec=0
+RestartSec=2
+Restart=always
+LimitNOFILE=infinity
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+Delegate=yes
+KillMode=process
+OOMScoreAdjust=-500
+
+[Install]
+WantedBy=multi-user.target
