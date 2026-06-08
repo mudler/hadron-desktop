@@ -1922,12 +1922,12 @@ RUN ldconfig 2>/dev/null || true; \
     for h in /usr/bin/fusermount3 /usr/bin/fusermount; do \
         [ -e "$h" ] && chmod u+s "$h" || true; \
     done; \
-    # Per-user rootless setup (subuid/subgid + Flathub remote) runs late on the
-    # booted system via a systemd oneshot. Like ly/bluetooth it must be pulled
-    # into multi-user.target directly (Kairos forces that target).
-    chmod +x /usr/bin/hadron-rootless-setup; \
-    systemctl enable hadron-rootless-setup.service 2>/dev/null || true; \
-    ln -sf /usr/lib/systemd/system/hadron-rootless-setup.service /etc/systemd/system/multi-user.target.wants/hadron-rootless-setup.service
+    # Per-user setup (Flathub remote) runs late on the booted system via a
+    # systemd oneshot. Like ly/bluetooth it must be pulled into
+    # multi-user.target directly (Kairos forces that target).
+    chmod +x /usr/bin/hadron-user-setup; \
+    systemctl enable hadron-user-setup.service 2>/dev/null || true; \
+    ln -sf /usr/lib/systemd/system/hadron-user-setup.service /etc/systemd/system/multi-user.target.wants/hadron-user-setup.service
 
 
 # ===========================================================================

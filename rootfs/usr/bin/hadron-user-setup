@@ -1,20 +1,17 @@
 #!/bin/sh
-# Per-boot rootless setup for podman + flatpak, run late (after users exist and
-# /home is mounted) by hadron-rootless-setup.service. Idempotent.
+# Per-boot per-user setup, run late (after users exist and /home is mounted) by
+# hadron-user-setup.service. Idempotent.
 #
-#  - subuid/subgid ranges per human user → rootless podman multi-uid mapping.
-#    /etc is not persisted on Kairos, so this re-runs every boot.
 #  - the Flathub remote per human user (--user installs land on persistent
 #    /home, so the remote persists; --if-not-exists makes re-runs cheap).
 #    Added with --no-gpg-verify because the image ships libgpgme but no gpg.
-base=100000; size=65536; i=0
+#
+# (Docker is rootful and needs no per-user subuid/subgid mapping, so unlike the
+# old podman setup this no longer touches /etc/subuid or /etc/subgid.)
 for u in $(awk -F: '$3>=1000 && $3<60000 {print $1}' /etc/passwd); do
-    grep -q "^$u:" /etc/subuid 2>/dev/null || echo "$u:$((base + i*size)):$size" >> /etc/subuid
-    grep -q "^$u:" /etc/subgid 2>/dev/null || echo "$u:$((base + i*size)):$size" >> /etc/subgid
     home=$(awk -F: -v u="$u" '$1==u {print $6}' /etc/passwd)
     if [ -d "$home" ]; then
         su - "$u" -c 'flatpak --user remote-add --if-not-exists --no-gpg-verify \
             flathub https://dl.flathub.org/repo/' >/dev/null 2>&1 || true
     fi
-    i=$((i + 1))
 done
