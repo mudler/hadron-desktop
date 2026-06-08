@@ -129,33 +129,38 @@ else
         err "SWAY_INSTALL_NONINTERACTIVE=1 with SWAY_USER/SWAY_PASS/SWAY_DISK[/SWAY_HOSTNAME]."
         exit 1
     fi
-    banner
-    step 1 "Hostname"
-    HOSTNAME_VAL=$(prompt "Hostname" "hadron")
-    step 2 "Username"
-    USERNAME=$(prompt "Username" "")
-    while [ -z "$USERNAME" ]; do USERNAME=$(prompt "Username (required)" ""); done
-    step 3 "Password"
-    PASSWORD=$(prompt_secret "Password for $USERNAME")
-    step 4 "SSH keys (optional)"
-    say "   ${DIM}Import your public SSH keys from GitHub for remote login.${R}"
-    GITHUB=$(prompt "GitHub username (blank to skip)" "")
-    step 5 "Target disk"
-    say "   ${DIM}The selected disk will be ERASED.${R}"
-    DISK=$(pick_disk)
+    # Loop the whole wizard: a non-confirmation re-asks instead of dead-ending the
+    # installer. (Aborting the confirm used to `exit 1`, which killed the installer
+    # service and left the live system stuck with no way to retry.)
+    while :; do
+        banner
+        step 1 "Hostname"
+        HOSTNAME_VAL=$(prompt "Hostname" "hadron")
+        step 2 "Username"
+        USERNAME=$(prompt "Username" "")
+        while [ -z "$USERNAME" ]; do USERNAME=$(prompt "Username (required)" ""); done
+        step 3 "Password"
+        PASSWORD=$(prompt_secret "Password for $USERNAME")
+        step 4 "SSH keys (optional)"
+        say "   ${DIM}Import your public SSH keys from GitHub for remote login.${R}"
+        GITHUB=$(prompt "GitHub username (blank to skip)" "")
+        step 5 "Target disk"
+        say "   ${DIM}The selected disk will be ERASED.${R}"
+        DISK=$(pick_disk)
 
-    # --- summary + confirm -------------------------------------------------
-    step 6 "Confirm"
-    say "   ${B}Hostname${R}    : $HOSTNAME_VAL"
-    say "   ${B}Username${R}    : $USERNAME ${DIM}(groups: admin audio video render input bluetooth seat)${R}"
-    say "   ${B}SSH keys${R}    : ${GITHUB:+github:$GITHUB}${GITHUB:-none}"
-    say "   ${B}Install to${R}  : ${RED}$DISK  (all data erased)${R}"
-    say ""
-    _ans=$(prompt "Type ${B}yes${R} to install" "")
-    case "$_ans" in
-        y|Y|yes|YES|Yes) ;;
-        *) err "Aborted — nothing was written."; exit 1 ;;
-    esac
+        # --- summary + confirm ---------------------------------------------
+        step 6 "Confirm"
+        say "   ${B}Hostname${R}    : $HOSTNAME_VAL"
+        say "   ${B}Username${R}    : $USERNAME ${DIM}(groups: admin audio video render input bluetooth seat)${R}"
+        say "   ${B}SSH keys${R}    : ${GITHUB:+github:$GITHUB}${GITHUB:-none}"
+        say "   ${B}Install to${R}  : ${RED}$DISK  (all data erased)${R}"
+        say ""
+        _ans=$(prompt "Type ${B}yes${R} to install (anything else starts over)" "")
+        case "$_ans" in
+            y|Y|yes|YES|Yes) break ;;
+            *) say ""; err "Not confirmed — starting over."; sleep 1 ;;
+        esac
+    done
 fi
 
 HASH=$(printf '%s' "$PASSWORD" | openssl passwd -6 -stdin)

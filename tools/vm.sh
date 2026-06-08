@@ -77,8 +77,12 @@ if [ "$MODE" = "install" ]; then
     exit 1
   }
   echo "==> install mode, ISO: $ISO"
-  # boot the ISO once; subsequent reboots boot the freshly-installed disk
-  CDROM=(-cdrom "$ISO" -boot once=d)
+  # CD gets bootindex=1, the disk bootindex=0 (set below). UEFI/OVMF honours
+  # bootindex: an empty disk is skipped so it boots the CD and installs; once the
+  # disk is bootable it wins, so the post-install reboot goes into the installed
+  # system instead of looping the installer. (`-boot once=d` is ignored by OVMF.)
+  CDROM=(-drive if=none,id=cd0,media=cdrom,readonly=on,file="$ISO" \
+         -device ide-cd,drive=cd0,bootindex=1)
 elif [ "$MODE" != "run" ]; then
   echo "error: unknown mode '$MODE' (use 'install' or 'run')" >&2
   exit 1
@@ -117,7 +121,8 @@ exec qemu-system-x86_64 \
   -m "$MEM" -smp "$CPUS" \
   -drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
   -drive if=pflash,format=raw,unit=1,file="$OVMF_VARS" \
-  -drive if=virtio,format=qcow2,file="$DISK" \
+  -drive if=none,id=hd0,format=qcow2,file="$DISK" \
+  -device virtio-blk-pci,drive=hd0,bootindex=0 \
   "${CDROM[@]}" \
   -device virtio-vga \
   -netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
