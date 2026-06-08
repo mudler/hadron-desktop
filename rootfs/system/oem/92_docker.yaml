@@ -2,9 +2,9 @@
 #
 # Two responsibilities:
 #  1. Persist /var/lib/docker. Kairos does not persist /var/lib by default, so
-#     the rootful daemon's images/containers would vanish on reboot. Append it to
-#     the persistent bind-mount list (CUSTOM_BIND_MOUNTS, consumed by cos-setup's
-#     rootfs stage into /run/cos/cos-layout.env).
+#     the rootful daemon's images/containers would vanish on reboot. Add it to
+#     the persistent bind-mount list (CUSTOM_BIND_MOUNTS, written to
+#     /run/cos/cos-layout.env, which cos-setup's rootfs stage consumes).
 #  2. Re-enable + start docker.service on the installed system. Kairos manages
 #     /etc as an overlay and forces multi-user.target, shadowing the baked
 #     enablement — mirroring 91_sway_session.yaml.
@@ -12,6 +12,7 @@ name: "docker"
 stages:
   rootfs:
     - name: "persist /var/lib/docker"
+      environment_file: /run/cos/cos-layout.env
       environment:
         CUSTOM_BIND_MOUNTS: "/var/lib/docker"
   boot:
