@@ -35,6 +35,7 @@ users:
       - input
       - bluetooth
       - seat
+      - docker            # docker daemon access
     ssh_authorized_keys:
       # - github:yourusername
       # - ssh-ed25519 AAAA... you@host
