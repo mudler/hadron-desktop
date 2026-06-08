@@ -151,7 +151,7 @@ else
         # --- summary + confirm ---------------------------------------------
         step 6 "Confirm"
         say "   ${B}Hostname${R}    : $HOSTNAME_VAL"
-        say "   ${B}Username${R}    : $USERNAME ${DIM}(groups: admin audio video render input bluetooth seat)${R}"
+        say "   ${B}Username${R}    : $USERNAME ${DIM}(groups: admin audio video render input bluetooth seat docker)${R}"
         say "   ${B}SSH keys${R}    : ${GITHUB:+github:$GITHUB}${GITHUB:-none}"
         say "   ${B}Install to${R}  : ${RED}$DISK  (all data erased)${R}"
         say ""
@@ -178,7 +178,7 @@ hostname: "$HOSTNAME_VAL"
 users:
   - name: "$USERNAME"
     passwd: '$HASH'
-    groups: [admin, audio, video, render, input, bluetooth, seat]
+    groups: [admin, audio, video, render, input, bluetooth, seat, docker]
 EOF
 if [ -n "$GITHUB" ]; then
     cat >> "$OUT" <<EOF

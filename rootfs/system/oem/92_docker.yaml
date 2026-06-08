@@ -1,0 +1,26 @@
+# Docker on the installed desktop.
+#
+# Two responsibilities:
+#  1. Persist /var/lib/docker. Kairos does not persist /var/lib by default, so
+#     the rootful daemon's images/containers would vanish on reboot. Add it to
+#     the persistent bind-mount list (CUSTOM_BIND_MOUNTS, written to
+#     /run/cos/cos-layout.env, which cos-setup's rootfs stage consumes).
+#  2. Re-enable + start docker.service on the installed system. Kairos manages
+#     /etc as an overlay and forces multi-user.target, shadowing the baked
+#     enablement — mirroring 91_sway_session.yaml.
+name: "docker"
+stages:
+  rootfs:
+    - name: "persist /var/lib/docker"
+      environment_file: /run/cos/cos-layout.env
+      environment:
+        CUSTOM_BIND_MOUNTS: "/var/lib/docker"
+  boot:
+    - if: '! grep -q "install-mode" /proc/cmdline && [ ! -f /run/cos/live_mode ]'
+      name: "enable + start docker on the installed desktop"
+      commands:
+        - mkdir -p /var/lib/docker /etc/systemd/system/multi-user.target.wants
+        - ln -sf /usr/lib/systemd/system/docker.service /etc/systemd/system/multi-user.target.wants/docker.service
+        - systemctl daemon-reload
+        - systemctl start docker.socket || true
+        - systemctl start docker.service || true

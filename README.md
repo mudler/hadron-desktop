@@ -22,6 +22,7 @@ harness) and depends only on the published Hadron images
 - **Networking:** NetworkManager + wpa_supplicant (wifi).
 - **Audio:** PipeWire + WirePlumber.
 - **Bluetooth:** BlueZ.
+- **Containers:** rootful docker + distrobox (mutable dev-env containers).
 - **Desktop polish:** waybar, mako, fuzzel, wl-clipboard, slurp, swayidle.
 - **Real-hardware firmware:** optional curated `linux-firmware` subset
   (`--build-arg FIRMWARE=true`).
