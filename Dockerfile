@@ -1269,6 +1269,19 @@ RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://download.docke
     && cp -a docker/dockerd docker/docker docker/containerd docker/containerd-shim-runc-v2 docker/runc docker/docker-init docker/docker-proxy docker/ctr /docker/usr/bin/ \
     && rm -rf docker
 
+# --- distrobox — mutable dev-environment containers on docker ---------------
+# distrobox is pure POSIX shell (no toolchain). Its install script lays the
+# distrobox/distrobox-* scripts into <prefix>/bin and shared data into
+# <prefix>/share. It drives the `docker` CLI directly when podman is absent.
+FROM toolchain AS distrobox
+ARG DISTROBOX_VERSION=1.8.2.5
+RUN mkdir -p /distrobox/usr
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/89luca89/distrobox/archive/refs/tags/${DISTROBOX_VERSION}.tar.gz -o db.tgz \
+    && tar -xf db.tgz && rm db.tgz && mv distrobox-* src
+WORKDIR /build/src
+RUN ./install --prefix /distrobox/usr
+
 # --- flatpak support libraries ---------------------------------------------
 # libarchive — OCI/bundle handling for ostree + flatpak (zlib/lzma/zstd/openssl
 # all come from the toolchain).
