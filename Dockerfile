@@ -1253,6 +1253,22 @@ RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://github.com/mgo
 RUN sed -i '/^\[engine\]/a conmon_path = ["/usr/lib/podman/conmon"]\nhelper_binaries_dir = ["/usr/lib/podman"]' /podman/etc/containers/containers.conf \
     && sed -i 's|/usr/local/bin/|/usr/bin/|g' /podman/etc/containers/storage.conf
 
+# --- docker (static bundle) — rootful OCI containers ------------------------
+# Docker's daemon + CLI + containerd + runc ship as fully-static Go binaries in
+# the official static bundle (same musl-friendly pattern podman-static used).
+# dockerd spawns its own containerd child when --containerd is not given, so a
+# single docker.service is enough. The base image already provides iptables-nft
+# and the kernel ships nf_conntrack/bridge/br_netfilter, so docker's bridge+NAT
+# networking works without vendoring a separate network stack.
+FROM toolchain AS docker
+ARG DOCKER_VERSION=29.5.3
+RUN mkdir -p /docker/usr/bin
+WORKDIR /build
+RUN curl -fL --retry 5 --retry-delay 3 --retry-all-errors https://download.docker.com/linux/static/stable/x86_64/docker-${DOCKER_VERSION}.tgz -o d.tgz \
+    && tar -xf d.tgz && rm d.tgz \
+    && cp -a docker/dockerd docker/docker docker/containerd docker/containerd-shim-runc-v2 docker/runc docker/docker-init docker/docker-proxy docker/ctr /docker/usr/bin/ \
+    && rm -rf docker
+
 # --- flatpak support libraries ---------------------------------------------
 # libarchive — OCI/bundle handling for ostree + flatpak (zlib/lzma/zstd/openssl
 # all come from the toolchain).
