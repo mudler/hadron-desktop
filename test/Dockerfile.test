@@ -13,7 +13,7 @@ ARG MILESTONE=M0
 # needs a user here. Create the test user and mask the ly display manager (the
 # test can't drive ly's interactive TUI login over a headless VT).
 RUN for g in audio video render input bluetooth seat; do groupadd -f "$g"; done; \
-    useradd -m -u 1000 -s /bin/bash -G audio,video,render,input,bluetooth sway && \
+    useradd -m -u 1000 -s /bin/bash -G audio,video,render,input,bluetooth,docker sway && \
     install -d -o sway -g sway /home/sway/.config /home/sway/.local/state && \
     systemctl mask ly.service 2>/dev/null || true
 
@@ -21,6 +21,10 @@ RUN for g in audio video render input bluetooth seat; do groupadd -f "$g"; done;
 # layer enables systemd-networkd; mask it here, after that layer has run).
 RUN systemctl mask systemd-networkd.service systemd-networkd.socket \
         systemd-networkd-wait-online.service 2>/dev/null || true
+# The live test boot runs on a Kairos overlay rootfs; docker's overlay2 driver
+# cannot stack on another overlayfs, so force the always-works vfs driver here.
+# Production (installed) systems keep overlay2 on the /var/lib/docker bind-mount.
+RUN printf '%s\n' '{' '  "storage-driver": "vfs"' '}' > /etc/docker/daemon.json
 # The wifi test fabricates two mac80211_hwsim radios: wlan0 runs a hostapd AP,
 # wlan1 is the NetworkManager client. Keep wlan0 out of NM's hands so hostapd
 # can own it.

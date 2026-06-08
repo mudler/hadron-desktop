@@ -19,7 +19,7 @@ MS="$(cat /etc/swaytest-milestone 2>/dev/null || echo M0)"
 DESKUSER="${DESKUSER:-sway}"   # desktop user created in M1
 
 # milestone ordinal, for ">= Mx" comparisons
-ord() { case "$1" in M0) echo 0;; M1) echo 1;; M2) echo 2;; M3) echo 3;; M4) echo 4;; M5) echo 5;; M6) echo 6;; *) echo 0;; esac; }
+ord() { case "$1" in M0) echo 0;; M1) echo 1;; M2) echo 2;; M3) echo 3;; M4) echo 4;; M5) echo 5;; M6) echo 6;; M7) echo 7;; *) echo 0;; esac; }
 TARGET="$(ord "$MS")"
 want() { [ "$(ord "$1")" -le "$TARGET" ]; }
 
@@ -64,6 +64,51 @@ screenshot() {
 }
 
 say "BEGIN milestone=$MS"
+
+# ----- M7: docker + distrobox container tooling -----------------------------
+if want M7; then
+  # dockerd is a rootful system service (enabled into multi-user.target). Wait
+  # for it and the API socket to come up.
+  if wait_for 60 sh -c "systemctl is-active docker >/dev/null 2>&1"; then
+    pass docker_service_active
+  else
+    fail docker_service_active
+    journalctl -b -u docker --no-pager 2>/dev/null | tail -8 | while read -r l; do info "diag docker: $l"; done
+  fi
+  if wait_for 30 sh -c "docker info >/dev/null 2>&1"; then
+    pass docker_info
+    info "docker=$(docker version --format '{{.Server.Version}}' 2>/dev/null) driver=$(docker info --format '{{.Driver}}' 2>/dev/null)"
+  else
+    fail docker_info
+    info "docker_err=$(docker info 2>&1 | tr -d '\n' | cut -c1-100)"
+  fi
+  # Real pull + run over slirp NAT (proves bridge networking + registry egress).
+  if docker run --rm hello-world >/tmp/hello.log 2>&1 && grep -q "Hello from Docker" /tmp/hello.log; then
+    pass docker_run_hello
+  else
+    fail docker_run_hello
+    tail -4 /tmp/hello.log 2>/dev/null | while read -r l; do info "diag hello: $l"; done
+  fi
+  # The desktop user must reach the daemon via the docker group (no sudo).
+  if su "$DESKUSER" -c "docker ps >/dev/null 2>&1"; then pass docker_group_access; else fail docker_group_access; fi
+  # distrobox: create + enter an alpine box as the desktop user. First enter runs
+  # distrobox-init inside, which needs container egress (apk). Generous timeout.
+  if su "$DESKUSER" -c "command -v distrobox >/dev/null 2>&1"; then pass distrobox_present; else fail distrobox_present; fi
+  su "$DESKUSER" -c "distrobox rm -f dbtest >/dev/null 2>&1" || true
+  if su "$DESKUSER" -c "distrobox create --yes --image alpine:latest --name dbtest" >/tmp/dbcreate.log 2>&1; then
+    pass distrobox_create
+  else
+    fail distrobox_create
+    tail -5 /tmp/dbcreate.log 2>/dev/null | while read -r l; do info "diag dbcreate: $l"; done
+  fi
+  if su "$DESKUSER" -c "distrobox enter dbtest -- cat /etc/os-release" >/tmp/dbenter.log 2>&1 && grep -qi alpine /tmp/dbenter.log; then
+    pass distrobox_enter
+    info "dbos=$(grep -i pretty_name /tmp/dbenter.log 2>/dev/null | cut -c1-50)"
+  else
+    fail distrobox_enter
+    tail -6 /tmp/dbenter.log 2>/dev/null | while read -r l; do info "diag dbenter: $l"; done
+  fi
+fi
 
 # ----- M0: boot + harness plumbing ------------------------------------------
 if want M0; then
